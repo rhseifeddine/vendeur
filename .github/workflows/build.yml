@@ -1,0 +1,95 @@
+name: Build Android APK (Release)
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: false
+          android: false
+          dotnet: false
+          haskell: false
+          large-packages: false
+          docker-images: false
+          swap-storage: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Cache Pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Cache Buildozer Global Directory
+        uses: actions/cache@v4
+        with:
+          path: ~/.buildozer
+          key: ${{ runner.os }}-buildozer-global-${{ hashFiles('buildozer.spec') }}
+
+      - name: Cache Buildozer Local Directory
+        uses: actions/cache@v4
+        with:
+          path: .buildozer
+          key: ${{ runner.os }}-buildozer-local-${{ hashFiles('buildozer.spec') }}
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git libtool pkg-config autoconf automake \
+            libffi-dev libssl-dev libltdl-dev libncurses5-dev \
+            libncursesw5-dev python3-dev zip unzip zlib1g-dev gettext autopoint \
+            openjdk-17-jdk
+
+      - name: Install Buildozer
+        run: |
+          pip install --upgrade pip
+          pip install buildozer cython==0.29.36
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > ${{ github.workspace }}/magpro.keystore
+
+      - name: Inject Telegram Secrets into main.py
+        run: |
+          sed -i "s/GITHUB_SECRET_TELEGRAM_BOT_TOKEN/${{ secrets.TELEGRAM_BOT_TOKEN }}/g" main.py
+          sed -i "s/GITHUB_SECRET_TELEGRAM_ADMIN_ID/${{ secrets.TELEGRAM_ADMIN_ID }}/g" main.py
+
+      - name: Build and Sign Release APK
+        env:
+          GRADLE_OPTS: "-Xmx4096m -Dorg.gradle.daemon=false"
+          P4A_RELEASE_KEYSTORE: ${{ github.workspace }}/magpro.keystore
+          P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+          P4A_RELEASE_KEYALIAS: magpro
+          P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          yes | buildozer android release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MagPro-Release-Build
+          path: bin/*
