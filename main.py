@@ -573,7 +573,7 @@ class StockApp(MDApp):
     lbl_cart_total = None
     lbl_total_title = None
     current_entity_type_mgmt = 'account'
-    DOC_TRANSLATIONS = {'BV': 'Bon de Vente', 'BA': "Bon d'Achat", 'FC': 'Facture Vente', 'FF': 'Facture Achat', 'RC': 'Retour Client', 'RF': 'Retour Fournisseur', 'TR': 'Transfert de Stock', 'FP': 'Facture Proforma', 'DP': 'Bon de Commande', 'BI': 'Bon Initial'}
+    DOC_TRANSLATIONS = {'BV': 'Bon de Vente', 'BA': "Bon d'Achat", 'FC': 'Facture Vente', 'FF': 'Facture Achat', 'RC': 'Retour Client', 'RF': 'Retour Fournisseur', 'TR': 'Transfert de Stock', 'FP': 'Facture Proforma', 'DP': 'Bon de Commande', 'BI': 'Bon Initial', 'BE': "Bon d'Entrée", 'BS': 'Bon de Sortie'}
     current_product_list_source = []
     current_page_offset = 0
     batch_size = 50
@@ -735,7 +735,8 @@ class StockApp(MDApp):
         is_sale_or_manage = self.current_mode in ['sale', 'return_sale', 'invoice_sale', 'proforma', 'manage_products']
         is_transfer = self.current_mode == 'transfer'
         is_request = self.current_mode == 'request_stock'
-        allowed_autre_modes = ['sale', 'invoice_sale', 'proforma', 'order_purchase', 'return_sale']
+        is_stock_io = self.current_mode in ['stock_in', 'stock_out']
+        allowed_autre_modes = ['sale', 'invoice_sale', 'proforma', 'order_purchase', 'return_sale', 'stock_in', 'stock_out']
         is_truck_mode = getattr(self, 'user_sales_mode', 'store') == 'truck'
 
         def fmt_qty(val):
@@ -796,7 +797,7 @@ class StockApp(MDApp):
                         p_color = [0, 0.6, 0, 1]
                     if s_context <= -900000 or s_wh <= -900000:
                         stock_text = 'Illimité'
-                    elif is_truck_mode:
+                    elif is_truck_mode or is_stock_io:
                         stock_text = f'Qté: {fmt_qty(s_context)}'
                     elif s_wh != 0:
                         stock_text = f'Qté: {fmt_qty(s_context)} | Dép: {fmt_qty(s_wh)}'
@@ -851,7 +852,8 @@ class StockApp(MDApp):
         is_sale_or_manage = self.current_mode in ['sale', 'return_sale', 'invoice_sale', 'proforma', 'manage_products']
         is_transfer = self.current_mode == 'transfer'
         is_request = self.current_mode == 'request_stock'
-        allowed_autre_modes = ['sale', 'invoice_sale', 'proforma', 'order_purchase', 'return_sale']
+        is_stock_io = self.current_mode in ['stock_in', 'stock_out']
+        allowed_autre_modes = ['sale', 'invoice_sale', 'proforma', 'order_purchase', 'return_sale', 'stock_in', 'stock_out']
         is_truck_mode = getattr(self, 'user_sales_mode', 'store') == 'truck'
 
         def fmt_qty(val):
@@ -905,7 +907,7 @@ class StockApp(MDApp):
                         p_color = [0, 0.6, 0, 1]
                     if s_context <= -900000 or s_wh <= -900000:
                         stock_text = 'Illimité'
-                    elif is_truck_mode:
+                    elif is_truck_mode or is_stock_io:
                         stock_text = f'Qté: {fmt_qty(s_context)}'
                     elif s_wh != 0:
                         stock_text = f'Qté: {fmt_qty(s_context)} | Dép: {fmt_qty(s_wh)}'
@@ -1165,7 +1167,7 @@ class StockApp(MDApp):
         if doc_type_raw in ['Ve', 'Cr', 'Re', 'Vr', 'Dr'] or (not items and amount_val != 0):
             is_simple = True
         is_supplier = False
-        if doc_type_raw in ['BA', 'FF', 'RF', 'DP', 'BI']:
+        if doc_type_raw in ['BA', 'FF', 'RF', 'DP', 'BI', 'BE']:
             is_supplier = True
         if is_simple:
             pay_type = transaction_data.get('type', '')
@@ -1192,7 +1194,7 @@ class StockApp(MDApp):
             else:
                 doc_title = 'CREDIT'
         else:
-            labels = {'BV': 'BON DE VENTE', 'BA': "BON D'ACHAT", 'FC': 'FACTURE', 'FF': 'FACTURE ACHAT', 'RC': 'RETOUR CLIENT', 'RF': 'RETOUR FOURN.', 'TR': 'TRANSFERT', 'FP': 'PROFORMA', 'DP': 'COMMANDE', 'BI': 'BON INITIAL'}
+            labels = {'BV': 'BON DE VENTE', 'BA': "BON D'ACHAT", 'FC': 'FACTURE', 'FF': 'FACTURE ACHAT', 'RC': 'RETOUR CLIENT', 'RF': 'RETOUR FOURN.', 'TR': 'TRANSFERT', 'FP': 'PROFORMA', 'DP': 'COMMANDE', 'BI': 'BON INITIAL', 'BE': "BON D'ENTRÉE", 'BS': 'BON DE SORTIE'}
             doc_title = labels.get(doc_type_raw, doc_type_raw)
             if doc_title == 'Ve':
                 doc_title = 'VERSEMENT'
@@ -1300,7 +1302,7 @@ class StockApp(MDApp):
             for line in prod_lines:
                 y = draw_text_line(line, y, font_bold, 'right')
             qty_str = str(int(qty)) if qty.is_integer() else str(qty)
-            if doc_type_raw == 'TR':
+            if doc_type_raw in ['TR', 'BE', 'BS']:
                 qty_display = f'Qté : {qty_str}'
                 y = draw_text_line(qty_display, y, font_large, 'center', color=(0, 0, 0))
                 draw.line([(margin + 50, y - 2), (PAPER_WIDTH - margin - 50, y - 2)], fill=(200, 200, 200), width=1)
@@ -1322,7 +1324,7 @@ class StockApp(MDApp):
             y += 5
         y += 10
         y = draw_separator(y)
-        if doc_type_raw != 'TR':
+        if doc_type_raw not in ['TR', 'BE', 'BS']:
             payment_info = transaction_data.get('payment_info', {})
             saved_paid = 0.0
             if 'amount' in payment_info:
@@ -2337,13 +2339,17 @@ class StockApp(MDApp):
             grid.add_widget(self._create_dash_btn('file-document-edit', 'FACT. ACHAT (FF)', bg_deep_orange, col_deep_orange, lambda x: self.open_mode('invoice_purchase')))
             grid.add_widget(self._create_dash_btn('file-document-outline', 'PROFORMA (FP)', bg_purple, col_purple, lambda x: self.open_mode('proforma')))
             grid.add_widget(self._create_dash_btn('clipboard-list', 'COMMANDE (DP)', bg_teal, col_cyan, lambda x: self.open_mode('order_purchase')))
+            grid.add_widget(self._create_dash_btn('tray-arrow-up', 'SORTIE (BS)', bg_brown, col_brown, lambda x: self.open_mode('stock_out')))
+            grid.add_widget(self._create_dash_btn('tray-arrow-down', 'ENTRÉE (BE)', bg_teal, col_cyan, lambda x: self.open_mode('stock_in')))
             grid.add_widget(self._create_dash_btn('keyboard-return', 'RETOUR CL.', bg_red, col_red, lambda x: self.open_mode('return_sale')))
             grid.add_widget(self._create_dash_btn('undo', 'RETOUR FR.', bg_blue, col_blue, lambda x: self.open_mode('return_purchase')))
-            grid.add_widget(self._create_dash_btn('account-group', 'CLIENTS', bg_teal, col_teal, lambda x: self.open_entity_manager('account')))
-            grid.add_widget(self._create_dash_btn('truck-delivery', 'FOURNISSEURS', bg_brown, col_brown, lambda x: self.open_entity_manager('supplier')))
-            grid.add_widget(self._create_dash_btn('database-edit', 'PRODUITS', bg_blue, col_blue, lambda x: self.open_mode('manage_products')))
             grid.add_widget(self._create_dash_btn('transfer', 'TRANSFERT (TR)', bg_purple, col_purple, lambda x: self.open_mode('transfer')))
+            grid.add_widget(self._create_dash_btn('database-edit', 'PRODUITS', bg_blue, col_blue, lambda x: self.open_mode('manage_products')))
             self.buttons_container.add_widget(grid)
+            grid2 = MDGridLayout(cols=2, spacing=dp(10), adaptive_height=True)
+            grid2.add_widget(self._create_dash_btn('account-group', 'CLIENTS', bg_teal, col_teal, lambda x: self.open_entity_manager('account')))
+            grid2.add_widget(self._create_dash_btn('truck-delivery', 'FOURNISSEURS', bg_brown, col_brown, lambda x: self.open_entity_manager('supplier')))
+            self.buttons_container.add_widget(grid2)
             self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', bg_catalogue, col_catalogue, self.open_catalogue_browser))
         self.stats_card_container.clear_widgets()
         self.stats_card_container.md_bg_color = (0, 0, 0, 0)
@@ -3488,6 +3494,11 @@ class StockApp(MDApp):
             else:
                 self.lbl_total_title.text = 'TOTAL:'
         self.update_location_display()
+        if hasattr(self, 'btn_loc_screen'):
+            if self.current_mode in ['stock_in', 'stock_out']:
+                self.btn_loc_screen.disabled = True
+            else:
+                self.btn_loc_screen.disabled = False
         if self.current_mode == 'request_stock':
             if hasattr(self, 'btn_ent_screen'):
                 self.btn_ent_screen.opacity = 0
@@ -3501,17 +3512,27 @@ class StockApp(MDApp):
                 self.lbl_total_title.text = ''
             if hasattr(self, 'lbl_cart_screen_total'):
                 self.lbl_cart_screen_total.text = ''
-        elif self.current_mode == 'transfer':
+        elif self.current_mode in ['transfer', 'stock_in', 'stock_out']:
             if hasattr(self, 'btn_ent_screen'):
                 self.btn_ent_screen.opacity = 1
-                self.btn_ent_screen.disabled = False
-                src = 'Magasin' if self.selected_location == 'store' else 'Dépôt'
-                dst = 'Dépôt' if self.selected_location == 'store' else 'Magasin'
-                self.btn_ent_screen.text = f'{src}  >>>  {dst}'
-                self.btn_ent_screen.md_bg_color = (0.5, 0, 0.5, 1)
+                if self.current_mode == 'transfer':
+                    self.btn_ent_screen.disabled = False
+                    src = 'Magasin' if self.selected_location == 'store' else 'Dépôt'
+                    dst = 'Dépôt' if self.selected_location == 'store' else 'Magasin'
+                    self.btn_ent_screen.text = f'{src}  >>>  {dst}'
+                    self.btn_ent_screen.md_bg_color = (0.5, 0, 0.5, 1)
+                else:
+                    if self.selected_entity:
+                        self.btn_ent_screen.text = self.fix_text(self.selected_entity.get('name', 'COMPTOIR'))[:15]
+                    self.btn_ent_screen.md_bg_color = (0, 0.6, 0.6, 1) if self.current_mode == 'stock_out' else (0.8, 0.4, 0, 1)
+                    self.btn_ent_screen.disabled = True
             if hasattr(self, 'btn_validate_cart'):
-                self.btn_validate_cart.text = 'VALIDER LE TRANSFERT'
-                self.btn_validate_cart.md_bg_color = (0.5, 0, 0.5, 1)
+                if self.current_mode == 'transfer':
+                    self.btn_validate_cart.text = 'VALIDER LE TRANSFERT'
+                    self.btn_validate_cart.md_bg_color = (0.5, 0, 0.5, 1)
+                else:
+                    self.btn_validate_cart.text = 'VALIDER LA SAISIE'
+                    self.btn_validate_cart.md_bg_color = (0.2, 0.6, 0.8, 1)
             if hasattr(self, 'total_bg_card'):
                 self.total_bg_card.opacity = 0
             if hasattr(self, 'lbl_total_title'):
@@ -3540,7 +3561,7 @@ class StockApp(MDApp):
                 line_ht = self._round_num(p * q)
                 line_ttc = self._round_num(line_ht * (1 + t_rate / 100.0))
                 q_disp = str(int(q)) if q.is_integer() else str(q)
-                if self.current_mode in ['transfer', 'request_stock']:
+                if self.current_mode in ['transfer', 'request_stock', 'stock_in', 'stock_out']:
                     details_text = f'Qté: {q_disp}'
                     d_color = [0.1, 0.4, 0.8, 1]
                 else:
@@ -3568,8 +3589,9 @@ class StockApp(MDApp):
                 return '0'
         is_invoice = self.current_mode in ['invoice_sale', 'invoice_purchase', 'proforma']
         is_request = self.current_mode == 'request_stock'
+        is_stock_only = self.current_mode in ['transfer', 'stock_in', 'stock_out']
         dialog_height = dp(600) if is_invoice else dp(520)
-        if is_request:
+        if is_request or is_stock_only:
             dialog_height = dp(350)
         content = MDBoxLayout(orientation='vertical', spacing='10dp', size_hint_y=None, height=dialog_height, padding=[0, '5dp', 0, 0])
         self.active_edit_target = 'qty'
@@ -3633,7 +3655,7 @@ class StockApp(MDApp):
             product_name = self.fix_text(raw_name)
             lbl_prod = MDLabel(text=product_name, halign='center', bold=True, font_style='Subtitle1', theme_text_color='Primary', adaptive_height=True)
             content.add_widget(lbl_prod)
-        if self.current_mode != 'transfer' and (not is_request):
+        if not is_stock_only and (not is_request):
             price_val = item.get('price', 0)
             self.edit_price_card = MDCard(size_hint_y=None, height='70dp', radius=[10], padding=[10, 0, 10, 0], elevation=0)
             self.edit_price_field = NoMenuTextField(text=fmt_num(price_val), hint_text='Prix Unitaire (DA)', font_size='26sp', halign='center', mode='line', readonly=True, line_color_normal=(0, 0, 0, 0), line_color_focus=(0, 0, 0, 0), pos_hint={'center_y': 0.5})
@@ -3722,7 +3744,7 @@ class StockApp(MDApp):
                     tva = 0.0
             line_ht = self._round_num(q * p)
             total = self._round_num(line_ht * (1 + tva / 100.0))
-            if self.current_mode != 'transfer' and (not is_request):
+            if not is_stock_only and (not is_request):
                 self.btn_save_edit.text = f'MODIFIER\n{total:.2f} DA'
             else:
                 self.btn_save_edit.text = 'MODIFIER'
@@ -3847,7 +3869,7 @@ class StockApp(MDApp):
                         item['price'] = float(p_text)
                     else:
                         item['price'] = new_price
-                elif self.current_mode != 'transfer' and (not is_request) and hasattr(self, 'edit_price_field'):
+                elif not is_stock_only and (not is_request) and hasattr(self, 'edit_price_field'):
                     p_text = self.edit_price_field.text or '0'
                     new_p = float(p_text)
                     if new_p < 0:
@@ -4244,8 +4266,8 @@ class StockApp(MDApp):
             self.selected_entity = None
         self.selected_location = 'store'
         self.update_cart_button()
-        titles = {'sale': 'Vente', 'purchase': 'Achat', 'return_sale': 'Retour Client', 'return_purchase': 'Retour Frns', 'transfer': 'Transfert', 'manage_products': 'Gestion Produits', 'invoice_sale': 'Facture Vente', 'invoice_purchase': 'Facture Achat', 'proforma': 'Facture Proforma', 'order_purchase': 'Bon de Commande'}
-        colors = {'sale': 'Green', 'purchase': 'Orange', 'return_sale': 'Red', 'return_purchase': 'Teal', 'transfer': 'Purple', 'manage_products': 'Blue', 'invoice_sale': 'Blue', 'invoice_purchase': 'DeepOrange', 'proforma': 'Purple', 'order_purchase': 'Teal'}
+        titles = {'sale': 'Vente', 'purchase': 'Achat', 'return_sale': 'Retour Client', 'return_purchase': 'Retour Frns', 'transfer': 'Transfert', 'manage_products': 'Gestion Produits', 'invoice_sale': 'Facture Vente', 'invoice_purchase': 'Facture Achat', 'proforma': 'Facture Proforma', 'order_purchase': 'Bon de Commande', 'stock_in': "Bon d'Entrée", 'stock_out': 'Bon de Sortie'}
+        colors = {'sale': 'Green', 'purchase': 'Orange', 'return_sale': 'Red', 'return_purchase': 'Teal', 'transfer': 'Purple', 'manage_products': 'Blue', 'invoice_sale': 'Blue', 'invoice_purchase': 'DeepOrange', 'proforma': 'Purple', 'order_purchase': 'Teal', 'stock_in': 'Teal', 'stock_out': 'Brown'}
         self.prod_toolbar.title = titles.get(mode, 'Produits')
         self.theme_cls.primary_palette = colors.get(mode, 'Blue')
         self.prod_toolbar.right_action_items = []
@@ -4278,10 +4300,13 @@ class StockApp(MDApp):
             if self.is_server_reachable:
                 self.fetch_products()
                 if mode not in ['transfer', 'manage_products']:
-                    e_type = 'supplier' if mode in ['purchase', 'return_purchase', 'invoice_purchase', 'order_purchase'] else 'account'
+                    e_type = 'supplier' if mode in ['purchase', 'return_purchase', 'invoice_purchase', 'order_purchase', 'stock_in'] else 'account'
                     self.fetch_entities(e_type)
             elif not self.all_products_raw:
                 self.load_products_from_cache()
+        if mode in ['stock_in', 'stock_out']:
+            self.selected_entity = {'id': None, 'name': 'COMPTOIR'}
+            skip_dialog = True
         modes_requiring_entity = ['sale', 'purchase', 'return_sale', 'return_purchase', 'invoice_sale', 'invoice_purchase', 'proforma', 'order_purchase']
         if mode in modes_requiring_entity and (not skip_dialog):
             e_type = 'supplier' if mode in ['purchase', 'return_purchase', 'invoice_purchase', 'order_purchase'] else 'account'
@@ -4306,8 +4331,7 @@ class StockApp(MDApp):
                 return str(val_float)
             except:
                 return str(value)
-        is_transfer = mode == 'transfer'
-        is_request = mode == 'request_stock'
+        is_transfer_or_stock = mode in ['transfer', 'request_stock', 'stock_in', 'stock_out']
         is_sale_context = mode in ['sale', 'return_sale', 'invoice_sale', 'proforma']
         curr_price = 0
         if is_sale_context:
@@ -4354,10 +4378,10 @@ class StockApp(MDApp):
         if is_sale_context and product.get('has_promo', False):
             promo_label = MDLabel(text='PROMOTION ACTIVÉE', halign='center', theme_text_color='Custom', text_color=(1, 0, 0, 1), font_style='Caption', bold=True, adaptive_height=True)
             header_box.add_widget(promo_label)
-        dialog_height = dp(420) if is_transfer or is_request else dp(500)
+        dialog_height = dp(420) if is_transfer_or_stock else dp(500)
         content = MDBoxLayout(orientation='vertical', spacing='8dp', size_hint_y=None, height=dialog_height, padding=[0, '5dp', 0, 0])
         content.add_widget(header_box)
-        if not is_transfer and (not is_request):
+        if not is_transfer_or_stock:
             self.price_card = MDCard(size_hint_y=None, height='70dp', radius=[10], padding=[10, 0, 10, 0], elevation=0)
             self.price_field = NoMenuTextField(text=price_val_str, hint_text='Prix Unitaire (DA)', font_size='26sp', halign='center', mode='line', readonly=True, line_color_normal=(0, 0, 0, 0), line_color_focus=(0, 0, 0, 0), pos_hint={'center_y': 0.5})
             self.price_field.theme_text_color = 'Custom'
@@ -4403,7 +4427,7 @@ class StockApp(MDApp):
         content.add_widget(qty_row)
         self.btn_add = MDRaisedButton(text='AJOUTER', md_bg_color=(0, 0.7, 0, 1), text_color=(1, 1, 1, 1), size_hint_x=0.7, size_hint_y=1, font_size='18sp', elevation=3)
         temp_product = product.copy()
-        if is_sale_context and (not is_transfer) and (not is_request):
+        if is_sale_context and (not is_transfer_or_stock):
             temp_product['price'] = float(curr_price or 0)
 
         def perform_add(x):
@@ -4423,7 +4447,7 @@ class StockApp(MDApp):
                         if in_cart_qty + req_qty > available_stock:
                             self.notify(f'Stock VAN insuffisant ! Disponible : {int(available_stock)}', 'error')
                             return
-                if not is_transfer and (not is_request) and hasattr(self, 'price_field'):
+                if not is_transfer_or_stock and hasattr(self, 'price_field'):
                     p_text = self.price_field.text
                     if not p_text:
                         p_text = '0'
@@ -4438,7 +4462,7 @@ class StockApp(MDApp):
         self.btn_add.bind(on_release=perform_add)
 
         def update_button_text():
-            if is_transfer or is_request:
+            if is_transfer_or_stock:
                 self.btn_add.text = 'AJOUTER'
                 return
             try:
@@ -4472,7 +4496,7 @@ class StockApp(MDApp):
         btn_minus.bind(on_release=decrease)
 
         def get_active_field():
-            if is_transfer or is_request:
+            if is_transfer_or_stock:
                 return self.qty_field
             return self.price_field if self.active_input_target == 'price' else self.qty_field
 
@@ -4982,6 +5006,9 @@ class StockApp(MDApp):
                 self.filter_history_list(specific_date=target_date)
 
     def toggle_location(self, x=None):
+        if self.current_mode in ['stock_in', 'stock_out']:
+            self.notify('الموقع ثابت على المتجر الرئيسي لهذه العملية', 'info')
+            return
         mode = getattr(self, 'user_sales_mode', 'store')
         if mode == 'truck':
             self.notify('Mode VAN : Emplacement fixe', 'info')
@@ -5089,7 +5116,7 @@ class StockApp(MDApp):
         if self.current_mode in ['return_sale', 'return_purchase']:
             self.process_transaction(paid_amount=0.0, total_amount=base_ttc, method='')
             return
-        is_zero_pay_mode = self.current_mode in ['transfer', 'proforma', 'order_purchase']
+        is_zero_pay_mode = self.current_mode in ['transfer', 'proforma', 'order_purchase', 'stock_in', 'stock_out']
         server_default_names = ['COMPTOIR', 'Comptoir', 'زبون افتراضي', 'مورد افتراضي', 'DEFAULT_CUSTOMER', 'DEFAULT_SUPPLIER']
         ent_name = str(self.selected_entity.get('name', '')).strip() if self.selected_entity else ''
         is_comptoir_entity = ent_name in server_default_names or not self.selected_entity or ent_name == ''
@@ -5357,7 +5384,7 @@ class StockApp(MDApp):
                 return
         self.is_transaction_in_progress = True
         try:
-            doc_type_map = {'sale': 'BV', 'purchase': 'BA', 'return_sale': 'RC', 'return_purchase': 'RF', 'transfer': 'TR', 'invoice_sale': 'FC', 'invoice_purchase': 'FF', 'proforma': 'FP', 'order_purchase': 'DP'}
+            doc_type_map = {'sale': 'BV', 'purchase': 'BA', 'return_sale': 'RC', 'return_purchase': 'RF', 'transfer': 'TR', 'invoice_sale': 'FC', 'invoice_purchase': 'FF', 'proforma': 'FP', 'order_purchase': 'DP', 'stock_in': 'BE', 'stock_out': 'BS'}
             doc_type = doc_type_map.get(self.current_mode, 'BV')
             if hasattr(self, 'original_doc_type') and self.original_doc_type == 'BI' and (self.current_mode == 'purchase'):
                 doc_type = 'BI'
@@ -5385,7 +5412,7 @@ class StockApp(MDApp):
             real_total_to_send = self._round_num(base_ttc + timbre_amount)
             excess_amount = 0.0
             invoice_paid_amount = paid_amount
-            is_real_transaction = self.current_mode not in ['proforma', 'order_purchase', 'transfer']
+            is_real_transaction = self.current_mode not in ['proforma', 'order_purchase', 'transfer', 'stock_in', 'stock_out']
             if is_real_transaction and self.current_mode in ['sale', 'purchase', 'invoice_sale', 'invoice_purchase']:
                 if paid_amount > real_total_to_send:
                     excess_amount = self._round_num(paid_amount - real_total_to_send)
@@ -5428,7 +5455,7 @@ class StockApp(MDApp):
             def finalize_process(req=None, res=None):
                 self.is_transaction_in_progress = False
                 try:
-                    printable_modes = ['sale', 'purchase', 'return_sale', 'return_purchase', 'transfer']
+                    printable_modes = ['sale', 'purchase', 'return_sale', 'return_purchase', 'transfer', 'stock_in', 'stock_out']
                     if self.current_mode in printable_modes:
                         if self.store.exists('printer_config'):
                             conf = self.store.get('printer_config')
@@ -5501,7 +5528,7 @@ class StockApp(MDApp):
     def save_offline_and_ui(self, data):
         self.save_to_history(data, synced=False)
         try:
-            printable_modes = ['sale', 'purchase', 'return_sale', 'return_purchase', 'transfer']
+            printable_modes = ['sale', 'purchase', 'return_sale', 'return_purchase', 'transfer', 'stock_in', 'stock_out']
             if self.current_mode in printable_modes:
                 if self.store.exists('printer_config'):
                     conf = self.store.get('printer_config')
@@ -5511,7 +5538,7 @@ class StockApp(MDApp):
             print(f'Offline Print Error: {e}')
         try:
             doc_type = data.get('doc_type', 'BV')
-            if doc_type not in ['TR', 'FP', 'DP', 'BI'] and data.get('entity_id'):
+            if doc_type not in ['TR', 'FP', 'DP', 'BI', 'BE', 'BS'] and data.get('entity_id'):
                 is_invoice_doc = doc_type in ['FC', 'FF']
                 ht, tva = self.calculate_cart_totals(data.get('items', []), is_invoice_doc)
                 total_amount = self._round_num(ht + tva)
@@ -5562,7 +5589,7 @@ class StockApp(MDApp):
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.button import MDFlatButton
         from kivy.metrics import dp
-        filters = [('Tout', 'ALL'), ('Vente (BV)', 'BV'), ('Achat (BA)', 'BA'), ('Bon Initial (BI)', 'BI'), ('Bon Commande (DP)', 'DP'), ('Proforma (FP)', 'FP'), ('Transfert (TR)', 'TR'), ('Facture Vente (FC)', 'FC'), ('Facture Achat (FF)', 'FF'), ('Retour Client (RC)', 'RC'), ('Retour Frns (RF)', 'RF')]
+        filters = [('Tout', 'ALL'), ('Vente (BV)', 'BV'), ('Achat (BA)', 'BA'), ('Bon Initial (BI)', 'BI'), ('Bon Commande (DP)', 'DP'), ('Proforma (FP)', 'FP'), ('Transfert (TR)', 'TR'), ('Facture Vente (FC)', 'FC'), ('Facture Achat (FF)', 'FF'), ('Retour Client (RC)', 'RC'), ('Retour Frns (RF)', 'RF'), ('Bon Entrée (BE)', 'BE'), ('Bon Sortie (BS)', 'BS')]
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(400))
         scroll = MDScrollView()
         list_layout = MDList()
@@ -5678,7 +5705,7 @@ class StockApp(MDApp):
             icon_name = 'file-document'
             icon_color = (0, 0.5, 0.8, 1)
             bg_col = (1, 1, 1, 1)
-            amount_text = f'{amount:.2f} DA'
+            amount_text = f'{abs(amount):.2f} DA'
             if doc_type == 'RC':
                 icon_name = 'keyboard-return'
                 bg_col = (1, 0.9, 0.9, 1)
@@ -5694,6 +5721,18 @@ class StockApp(MDApp):
                 icon_name = 'compare-horizontal'
                 bg_col = (0.95, 0.9, 1, 1)
                 icon_color = (0.5, 0, 0.5, 1)
+                amount_text = 'Stock'
+            elif doc_type == 'BE':
+                icon_name = 'tray-arrow-down'
+                bg_col = (0.9, 1, 0.9, 1)
+                icon_color = (0, 0.6, 0, 1)
+                full_doc_name = "Bon d'Entrée"
+                amount_text = 'Stock'
+            elif doc_type == 'BS':
+                icon_name = 'tray-arrow-up'
+                bg_col = (1, 0.9, 0.9, 1)
+                icon_color = (0.8, 0, 0, 1)
+                full_doc_name = 'Bon de Sortie'
                 amount_text = 'Stock'
             elif is_simple_payment:
                 p_type = data.get('type', 'client_pay')
@@ -5747,7 +5786,7 @@ class StockApp(MDApp):
                 self.rv_history.data = self.history_rv_data
                 self.rv_history.refresh_from_data()
             return
-        main_doc_prefixes = ['BV', 'BA', 'RC', 'RF', 'TR', 'FP', 'DP', 'BI', 'FC', 'FF']
+        main_doc_prefixes = ['BV', 'BA', 'RC', 'RF', 'TR', 'FP', 'DP', 'BI', 'FC', 'FF', 'BE', 'BS']
         default_names = ['زبون افتراضي', 'مورد افتراضي', 'DEFAULT_CUSTOMER', 'DEFAULT_SUPPLIER', 'Comptoir', 'Fournisseur']
         for item in result:
             if self.is_seller_mode:
@@ -5808,6 +5847,14 @@ class StockApp(MDApp):
                     icon_name = 'notebook-edit'
                     icon_color = (0.8, 0, 0, 1)
                     amount_text = f'- {abs(amount):.2f} DA'
+            elif prefix == 'BE':
+                icon_name = 'tray-arrow-down'
+                icon_color = (0, 0.6, 0, 1)
+                amount_text = 'Stock'
+            elif prefix == 'BS':
+                icon_name = 'tray-arrow-up'
+                icon_color = (0.8, 0, 0, 1)
+                amount_text = 'Stock'
             elif prefix == 'BV':
                 icon_name = 'cart'
                 full_doc_name = 'Bon de Vente'
@@ -5917,7 +5964,7 @@ class StockApp(MDApp):
                     self.show_simple_payment_dialog(amount=abs(float(data.get('amount', 0))))
                     return
                 self.original_doc_type = doc_type
-                mode_map = {'BV': 'sale', 'BA': 'purchase', 'RC': 'return_sale', 'RF': 'return_purchase', 'TR': 'transfer', 'FC': 'invoice_sale', 'FP': 'proforma', 'FF': 'invoice_purchase', 'DP': 'order_purchase', 'BI': 'purchase'}
+                mode_map = {'BV': 'sale', 'BA': 'purchase', 'RC': 'return_sale', 'RF': 'return_purchase', 'TR': 'transfer', 'FC': 'invoice_sale', 'FP': 'proforma', 'FF': 'invoice_purchase', 'DP': 'order_purchase', 'BI': 'purchase', 'BE': 'stock_in', 'BS': 'stock_out'}
                 self.open_mode(mode_map.get(doc_type, 'sale'), skip_dialog=True)
                 raw_items = data.get('items', [])
                 self.cart = []
@@ -5939,7 +5986,7 @@ class StockApp(MDApp):
                 if self.selected_entity and hasattr(self, 'btn_ent_screen'):
                     self.btn_ent_screen.text = self.fix_text(str(self.selected_entity.get('name', '')))[:15]
                     self.btn_ent_screen.disabled = False
-                    if self.current_mode in ['sale', 'return_sale', 'client_payment', 'invoice_sale', 'proforma']:
+                    if self.current_mode in ['sale', 'return_sale', 'client_payment', 'invoice_sale', 'proforma', 'stock_out']:
                         self.btn_ent_screen.md_bg_color = (0, 0.6, 0.6, 1)
                     else:
                         self.btn_ent_screen.md_bg_color = (0.8, 0.4, 0, 1)
@@ -6024,12 +6071,14 @@ class StockApp(MDApp):
             full_doc_name = 'Transfert Stock'
             display_amount = 'Stock'
             amount_color = (0.5, 0, 0.5, 1)
+        elif doc_type in ['BE', 'BS']:
+            display_amount = 'Stock'
         content = MDBoxLayout(orientation='vertical', spacing=10, size_hint_y=None, height=dp(550))
         header_box = MDCard(orientation='vertical', adaptive_height=True, padding=dp(10), md_bg_color=(0.95, 0.95, 0.95, 1), radius=[10])
         header_box.add_widget(MDLabel(text=self.fix_text(f'{full_doc_name} - {entity_name}'), bold=True, font_style='Subtitle1', adaptive_height=True))
         header_box.add_widget(MDLabel(text=f'Date: {date_display}', font_style='Caption', theme_text_color='Secondary', adaptive_height=True))
         header_box.add_widget(MDLabel(text=f'Montant: {display_amount}', theme_text_color='Custom', text_color=amount_color, bold=True, font_style='H5', adaptive_height=True))
-        if not is_financial and (not is_transfer) and (doc_type not in ['RC', 'RF']):
+        if not is_financial and (not is_transfer) and (doc_type not in ['RC', 'RF', 'BE', 'BS']):
             if timbre > 0:
                 header_box.add_widget(MDLabel(text=f'Timbre: {timbre:.2f} DA', font_style='Caption', theme_text_color='Custom', text_color=(0.5, 0, 0.5, 1), adaptive_height=True))
             diff = round(final_total - paid_amount, 2)
@@ -6053,7 +6102,7 @@ class StockApp(MDApp):
                 line_total = qty * price * (1 + float(item.get('tva', 0)) / 100)
                 item_box = MDBoxLayout(orientation='vertical', adaptive_height=True, padding=[dp(16), dp(8)], spacing=dp(4))
                 lbl_name = MDLabel(text=self.fix_text(item.get('name', '')), theme_text_color='Primary', font_style='Subtitle1', bold=True, adaptive_height=True, shorten=False)
-                if doc_type == 'TR':
+                if doc_type in ['TR', 'BE', 'BS']:
                     lbl_details = MDLabel(text=f'Qté: {qty_str}', theme_text_color='Secondary', font_style='Body2', adaptive_height=True)
                     item_box.add_widget(lbl_name)
                     item_box.add_widget(lbl_details)
@@ -6073,7 +6122,7 @@ class StockApp(MDApp):
         content.add_widget(scroll)
         actions_layout = MDBoxLayout(orientation='vertical', spacing='10dp', adaptive_height=True, padding=[0, '15dp', 0, 0])
         top_row = MDBoxLayout(orientation='horizontal', spacing='10dp', size_hint_y=None, height='50dp')
-        if doc_type not in ['FC', 'FP', 'FF', 'DP', 'BI']:
+        if doc_type not in ['FC', 'FP', 'FF', 'DP', 'BI', 'BE', 'BS']:
             btn_print = MDFillRoundFlatButton(text='IMPRIMER', md_bg_color=(0, 0.5, 0.8, 1), text_color=(1, 1, 1, 1), size_hint_x=0.5, on_release=do_print)
             top_row.add_widget(btn_print)
         btn_edit = MDFillRoundFlatButton(text='MODIFIER', md_bg_color=(0, 0.7, 0, 1), text_color=(1, 1, 1, 1), size_hint_x=0.5, on_release=do_load)
@@ -6200,7 +6249,7 @@ class StockApp(MDApp):
             timbre_to_show = diff_val
         display_total = self._round_num(calculated_items_total + timbre_to_show)
         is_reglement_kw = any((k in full_desc for k in ['règlement', 'reglement', 'سداد']))
-        main_docs = ['BV', 'BA', 'RC', 'RF', 'TR', 'FP', 'FC', 'FF', 'DP', 'BI']
+        main_docs = ['BV', 'BA', 'RC', 'RF', 'TR', 'FP', 'FC', 'FF', 'DP', 'BI', 'BE', 'BS']
         is_financial_op = False
         if not prefix in main_docs:
             if amount < 0:
@@ -6214,8 +6263,12 @@ class StockApp(MDApp):
             is_financial_op = True
         else:
             type_str = self.DOC_TRANSLATIONS.get(prefix, 'Opération')
-            amount_color = (0, 0, 0, 1)
-            display_amount_str = f'{display_total:.2f} DA'
+            if prefix in ['BE', 'BS']:
+                amount_color = (0, 0, 0, 1)
+                display_amount_str = 'Stock / Info'
+            else:
+                amount_color = (0, 0, 0, 1)
+                display_amount_str = f'{display_total:.2f} DA'
         header_box = MDCard(orientation='vertical', adaptive_height=True, padding=dp(10), md_bg_color=(0.95, 0.95, 0.95, 1), radius=[10])
         header_box.add_widget(MDLabel(text=self.fix_text(f'{type_str} - {entity_name}'), bold=True, font_style='Subtitle1', adaptive_height=True))
         header_box.add_widget(MDLabel(text=f"Date: {header_data.get('time', '')}", font_style='Caption', adaptive_height=True))
@@ -6223,7 +6276,7 @@ class StockApp(MDApp):
             header_box.add_widget(MDLabel(text=f'Montant: {display_amount_str}', theme_text_color='Custom', text_color=amount_color, bold=True, font_style='H5', adaptive_height=True))
             if timbre_to_show > 0:
                 header_box.add_widget(MDLabel(text=f'Droit de Timbre: {timbre_to_show:.2f} DA', theme_text_color='Custom', text_color=(0.5, 0, 0.5, 1), bold=True, font_style='Caption', adaptive_height=True))
-            if not is_financial_op and prefix not in ['FP', 'DP', 'RC', 'RF']:
+            if not is_financial_op and prefix not in ['FP', 'DP', 'RC', 'RF', 'BE', 'BS']:
                 paid_float = paid_val if not is_comptoir else display_total
                 diff = self._round_num(display_total - paid_float)
                 if abs(diff) < 0.05:
@@ -6249,7 +6302,7 @@ class StockApp(MDApp):
                 total_line = qty * price
                 item_box = MDBoxLayout(orientation='vertical', adaptive_height=True, padding=[dp(16), dp(8)], spacing=dp(4))
                 lbl_name = MDLabel(text=self.fix_text(item.get('name', '')), theme_text_color='Primary', font_style='Subtitle1', bold=True, adaptive_height=True, shorten=False)
-                if is_transfer:
+                if is_transfer or prefix in ['BE', 'BS']:
                     lbl_details = MDLabel(text=f'Qté: {qty_str}', theme_text_color='Secondary', font_style='Body2', adaptive_height=True)
                     item_box.add_widget(lbl_name)
                     item_box.add_widget(lbl_details)
@@ -6268,7 +6321,7 @@ class StockApp(MDApp):
         actions_layout = MDBoxLayout(orientation='vertical', spacing='10dp', adaptive_height=True, padding=[0, '15dp', 0, 0])
         top_row = MDBoxLayout(orientation='horizontal', spacing='10dp', size_hint_y=None, height='50dp')
         pdf_only_types = ['FC', 'FP', 'FF', 'DP', 'BI']
-        mixed_types = ['BA', 'BV', 'TR', 'RC', 'RF']
+        mixed_types = ['BA', 'BV', 'TR', 'RC', 'RF', 'BE', 'BS']
         if prefix not in pdf_only_types:
 
             def do_print_bt(x):
@@ -6397,17 +6450,21 @@ class StockApp(MDApp):
         found_entity = None
         search_name = header_data.get('entity', '').strip()
         search_id = header_data.get('entity_id')
+        prefix = header_data['desc'][:2]
+        mode_map = {'BV': 'sale', 'BA': 'purchase', 'RC': 'return_sale', 'RF': 'return_purchase', 'TR': 'transfer', 'FC': 'invoice_sale', 'FP': 'proforma', 'FF': 'invoice_purchase', 'DP': 'order_purchase', 'BI': 'purchase', 'BE': 'stock_in', 'BS': 'stock_out'}
+        mode = mode_map.get(prefix)
+        is_sale_mode = mode in ['sale', 'return_sale', 'invoice_sale', 'proforma']
         if search_id:
-            found_entity = next((e for e in self.all_clients if e['id'] == search_id), None)
-            if not found_entity:
+            if is_sale_mode:
+                found_entity = next((e for e in self.all_clients if e['id'] == search_id), None)
+            else:
                 found_entity = next((e for e in self.all_suppliers if e['id'] == search_id), None)
         if not found_entity and search_name:
-            found_entity = next((e for e in self.all_clients if e.get('name') == search_name), None)
-            if not found_entity:
-                found_entity = next((e for e in self.all_suppliers if e.get('name') == search_name), None)
-        prefix = header_data['desc'][:2]
-        mode_map = {'BV': 'sale', 'BA': 'purchase', 'RC': 'return_sale', 'RF': 'return_purchase', 'TR': 'transfer', 'FC': 'invoice_sale', 'FP': 'proforma', 'FF': 'invoice_purchase', 'DP': 'order_purchase', 'BI': 'purchase'}
-        mode = mode_map.get(prefix)
+            if search_name.lower() not in ['comptoir', 'client', 'fournisseur', 'passager', 'زبون افتراضي', 'مورد افتراضي']:
+                if is_sale_mode:
+                    found_entity = next((e for e in self.all_clients if e.get('name') == search_name), None)
+                else:
+                    found_entity = next((e for e in self.all_suppliers if e.get('name') == search_name), None)
         amount = float(header_data.get('amount', 0))
         full_desc = header_data.get('desc', '').lower()
         is_financial = False
@@ -6450,10 +6507,12 @@ class StockApp(MDApp):
         if self.selected_entity and hasattr(self, 'btn_ent_screen'):
             self.btn_ent_screen.text = self.fix_text(str(self.selected_entity.get('name', 'Client')))[:15]
             self.btn_ent_screen.disabled = False
-            if self.current_mode in ['sale', 'return_sale', 'client_payment', 'invoice_sale', 'proforma']:
+            if self.current_mode in ['sale', 'return_sale', 'client_payment', 'invoice_sale', 'proforma', 'stock_out']:
                 self.btn_ent_screen.md_bg_color = (0, 0.6, 0.6, 1)
             else:
                 self.btn_ent_screen.md_bg_color = (0.8, 0.4, 0, 1)
+            if self.current_mode in ['stock_in', 'stock_out']:
+                self.btn_ent_screen.disabled = True
         raw_loc = header_data.get('purchase_location')
         if not raw_loc:
             raw_loc = header_data.get('location')
