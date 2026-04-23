@@ -1008,7 +1008,6 @@ class StockApp(MDApp):
     def print_ticket_bluetooth(self, transaction_data):
         if platform != 'android':
             return
-            
         if not self.store.exists('printer_config'):
             self.notify('Imprimante non configurée', 'error')
             return
@@ -1016,47 +1015,37 @@ class StockApp(MDApp):
         target_mac = config.get('mac', '').strip()
         if not target_mac:
             return
-            
         socket = None
         try:
             adapter = BluetoothAdapter.getDefaultAdapter()
             if not adapter or not adapter.isEnabled():
                 self.notify('Bluetooth OFF', 'error')
                 return
-                
             device = adapter.getRemoteDevice(target_mac)
             uuid = UUID.fromString('00001101-0000-1000-8000-00805F9B34FB')
-            
             img = self.create_receipt_image(transaction_data)
             raster_chunks = self.get_image_raster_data(img)
-            
             socket = device.createRfcommSocketToServiceRecord(uuid)
             socket.connect()
             time.sleep(0.3)
             output_stream = socket.getOutputStream()
-            
             ESC = b'\x1b'
             GS = b'\x1d'
             INIT = ESC + b'@'
-            
             output_stream.write(INIT)
             output_stream.flush()
             time.sleep(0.1)
-            
             for chunk in raster_chunks:
                 output_stream.write(chunk)
                 output_stream.flush()
                 time.sleep(0.15)
-                
             output_stream.write(b'\n\n\n\n\n')
             output_stream.flush()
             time.sleep(0.2)
-            
             CUT = GS + b'V\x00'
             output_stream.write(CUT)
             output_stream.flush()
             time.sleep(0.5)
-            
             socket.close()
         except Exception as e:
             try:
@@ -1397,39 +1386,30 @@ class StockApp(MDApp):
         return final_image
 
     def get_image_raster_data(self, image):
-        max_width = 576 
+        max_width = 576
         if image.width > max_width:
             ratio = max_width / float(image.width)
             new_height = int(image.height * ratio)
             image = image.resize((max_width, new_height), Image.Resampling.LANCZOS)
-            
         if image.width % 8 != 0:
             target_width = image.width // 8 * 8
             image = image.crop((0, 0, target_width, image.height))
-            
         image = image.convert('1')
         width, height = image.size
         bytes_per_row = width // 8
-        
-        band_height = 120 
+        band_height = 120
         chunks = []
-        
         for y in range(0, height, band_height):
             current_band_height = min(band_height, height - y)
             band_image = image.crop((0, y, width, y + current_band_height))
-            
             xL = bytes_per_row % 256
             xH = bytes_per_row // 256
             yL = current_band_height % 256
             yH = current_band_height // 256
-            
-            cmd = b'\x1d\x76\x30\x00' + bytes([xL, xH, yL, yH])
-            
+            cmd = b'\x1dv0\x00' + bytes([xL, xH, yL, yH])
             raw_bytes = band_image.tobytes()
             inverted_bytes = bytearray([b ^ 255 for b in raw_bytes])
-            
             chunks.append(cmd + inverted_bytes)
-            
         return chunks
 
     def _round_num(self, value):
@@ -1509,6 +1489,10 @@ class StockApp(MDApp):
         self.status_bar_label = MDLabel(text='Initialisation...', halign='center', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_style='Caption', bold=True)
         self.status_bar_bg.add_widget(self.status_bar_label)
         self.root_box.add_widget(self.status_bar_bg)
+        self._heartbeat_event = Clock.schedule_interval(self.check_server_heartbeat, 5)
+        self.maps_enabled = False
+        self.init_servers_config()
+        self.apply_active_server()
         self._heartbeat_event = Clock.schedule_interval(self.check_server_heartbeat, 5)
         self.maps_enabled = False
         return self.root_box
@@ -3261,6 +3245,7 @@ class StockApp(MDApp):
                 self.logout_diag.dismiss()
             if self.store.exists('credentials'):
                 self.store.delete('credentials')
+            self.apply_active_server()
             self.password_field.text = ''
             self.sm.current = 'login'
         if not self.is_server_reachable:
@@ -3289,11 +3274,18 @@ class StockApp(MDApp):
         self.login_status_icon = MDIcon(icon='circle', font_size='15sp', pos_hint={'top': 0.96, 'right': 0.85}, theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1))
         layout.add_widget(self.login_status_icon)
         layout.add_widget(MDIconButton(icon='cog', pos_hint={'top': 0.98, 'right': 0.98}, on_release=self.open_ip_settings))
-        card = MDCard(orientation='vertical', size_hint=(0.85, None), height=dp(340), pos_hint={'center_x': 0.5, 'center_y': 0.5}, padding=dp(20), spacing=dp(15), radius=[20], elevation=4)
+        card_login = MDCard(orientation='vertical', size_hint=(0.85, None), height=dp(400), pos_hint={'center_x': 0.5, 'center_y': 0.5}, padding=dp(20), spacing=dp(15), radius=[20, 20, 20, 20], elevation=4)
         icon_box = MDFloatLayout(size_hint_y=None, height=dp(70))
         icon_box.add_widget(MDIcon(icon='store', font_size='60sp', pos_hint={'center_x': 0.5, 'center_y': 0.5}, theme_text_color='Primary'))
-        card.add_widget(icon_box)
-        card.add_widget(MDLabel(text='MagPro', halign='center', font_style='H5', bold=True))
+        card_login.add_widget(icon_box)
+        card_login.add_widget(MDLabel(text='MagPro Vendeur', halign='center', font_style='H5', bold=True))
+        self.btn_current_restaurant = MDCard(orientation='horizontal', size_hint=(1, None), height=dp(45), radius=[15, 15, 15, 15], md_bg_color=(0.1, 0.5, 0.8, 1), padding=[dp(15), 0, dp(15), 0], spacing=dp(10), ripple_behavior=True, on_release=self.open_restaurant_selector)
+        self.btn_current_restaurant.add_widget(MDIcon(icon='store', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='20sp', pos_hint={'center_y': 0.5}))
+        self.lbl_current_restaurant = MDLabel(text='Chargement...', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='center', font_name='ArabicFont', font_size='16sp')
+        self.btn_current_restaurant.add_widget(self.lbl_current_restaurant)
+        self.icon_chevron_restaurant = MDIcon(icon='chevron-down', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='24sp', pos_hint={'center_y': 0.5})
+        self.btn_current_restaurant.add_widget(self.icon_chevron_restaurant)
+        card_login.add_widget(self.btn_current_restaurant)
         saved_user = 'ADMIN'
         if self.store.exists('credentials'):
             saved_user = self.store.get('credentials').get('username', 'ADMIN')
@@ -3302,14 +3294,94 @@ class StockApp(MDApp):
         self.current_user_name = saved_user
         self.username_field = SmartTextField(hint_text='Utilisateur', text=self.current_user_name, icon_right='account')
         self.password_field = SmartTextField(hint_text='Mot de passe', password=True, icon_right='key')
-        card.add_widget(self.username_field)
-        card.add_widget(self.password_field)
-        card.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='18sp', size_hint_x=1, on_release=self.do_login))
-        layout.add_widget(card)
+        card_login.add_widget(self.username_field)
+        card_login.add_widget(self.password_field)
+        card_login.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='18sp', size_hint_x=1, on_release=self.do_login))
+        layout.add_widget(card_login)
         footer_label = MDLabel(text='MagPro v7.5.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.02}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
         layout.add_widget(footer_label)
         screen.add_widget(layout)
         return screen
+
+    def init_servers_config(self):
+        if not self.store.exists('servers_config'):
+            old_ip = '192.168.1.100'
+            old_ext = ''
+            old_pin = ''
+            if self.store.exists('config'):
+                cfg = self.store.get('config')
+                old_ip = cfg.get('ip', '192.168.1.100')
+                old_ext = cfg.get('ext_ip', '')
+                old_pin = cfg.get('server_pin', '')
+            default_server = {'name': 'Magasin Principal', 'local_ip': old_ip, 'ext_ip': old_ext, 'pin': old_pin}
+            self.store.put('servers_config', list=[default_server], active_index=0)
+
+    def apply_active_server(self):
+        if not self.store.exists('servers_config'):
+            self.init_servers_config()
+        data = self.store.get('servers_config')
+        servers = data.get('list', [])
+        idx = data.get('active_index', 0)
+        if not servers:
+            return
+        if idx >= len(servers):
+            idx = 0
+        active_srv = servers[idx]
+        self.local_server_ip = active_srv.get('local_ip', '192.168.1.100')
+        self.external_server_ip = active_srv.get('ext_ip', '')
+        self.server_ip = self.local_server_ip
+        self.active_server_ip = self.local_server_ip
+        is_seller = getattr(self, 'is_seller_mode', False)
+        if self.store.exists('config'):
+            is_seller = self.store.get('config').get('seller_mode', is_seller)
+        self.store.put('config', ip=self.local_server_ip, ext_ip=self.external_server_ip, seller_mode=is_seller, server_pin=active_srv.get('pin', ''))
+        if hasattr(self, 'lbl_current_restaurant') and self.lbl_current_restaurant:
+            self.lbl_current_restaurant.text = self.fix_text(active_srv.get('name', 'Magasin Inconnu'))
+        if hasattr(self, 'icon_chevron_restaurant') and self.icon_chevron_restaurant:
+            if len(servers) <= 1:
+                self.icon_chevron_restaurant.opacity = 0
+            else:
+                self.icon_chevron_restaurant.opacity = 1
+        if hasattr(self, 'btn_current_restaurant') and self.btn_current_restaurant:
+            from kivy.metrics import dp
+            if is_seller:
+                self.btn_current_restaurant.opacity = 0
+                self.btn_current_restaurant.height = 0
+                self.btn_current_restaurant.disabled = True
+            else:
+                self.btn_current_restaurant.opacity = 1
+                self.btn_current_restaurant.height = dp(45)
+                self.btn_current_restaurant.disabled = False
+        self._ping_local()
+
+    def open_restaurant_selector(self, instance=None):
+        data = self.store.get('servers_config')
+        servers = data.get('list', [])
+        if len(servers) <= 1:
+            return
+        content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(5))
+        scroll = MDScrollView(size_hint_y=None, height=dp(250))
+        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True)
+        for i, srv in enumerate(servers):
+            is_active = i == data.get('active_index', 0)
+            card = MDCard(orientation='vertical', size_hint_y=None, height=dp(55), elevation=0, md_bg_color=(0, 0, 0, 0), ripple_behavior=True, on_release=lambda x, idx=i: self.set_active_restaurant(idx))
+            lbl = MDLabel(text=self.fix_text(srv.get('name', 'Inconnu')), halign='center', valign='center', font_name='ArabicFont', font_size='20sp', bold=is_active, theme_text_color='Custom', text_color=(0.1, 0.4, 0.7, 1) if is_active else (0.3, 0.3, 0.3, 1))
+            card.add_widget(lbl)
+            list_layout.add_widget(card)
+            from kivymd.uix.card import MDSeparator
+            list_layout.add_widget(MDSeparator(height=dp(1)))
+        scroll.add_widget(list_layout)
+        content.add_widget(scroll)
+        self.dialog_select_resto = MDDialog(title='Choisir un Magasin', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.dialog_select_resto.dismiss())])
+        self.dialog_select_resto.open()
+
+    def set_active_restaurant(self, index):
+        data = self.store.get('servers_config')
+        self.store.put('servers_config', list=data.get('list', []), active_index=index)
+        self.apply_active_server()
+        if hasattr(self, 'dialog_select_resto') and self.dialog_select_resto:
+            self.dialog_select_resto.dismiss()
+        self.notify('Magasin sélectionné avec succès', 'success')
 
     def open_delivery_map(self):
         if not self.is_server_reachable:
@@ -3930,151 +4002,236 @@ class StockApp(MDApp):
         self.edit_dialog.open()
 
     def open_ip_settings(self, instance=None):
-        try:
-            if hasattr(self, 'dialog') and self.dialog:
-                self.dialog.dismiss()
-            scroll_view = MDScrollView(size_hint_y=None, height=dp(550))
-            content_list = MDBoxLayout(orientation='vertical', adaptive_height=True, padding=dp(0), spacing=dp(5))
+        import webbrowser
+        from kivy.core.clipboard import Clipboard
+        from kivymd.uix.button import MDFillRoundFlatIconButton
+        if hasattr(self, 'dialog') and getattr(self, 'dialog', None):
+            self.dialog.dismiss()
+        content_list = MDBoxLayout(orientation='vertical', spacing='12dp', adaptive_height=True, padding=[0, dp(10), 0, dp(20)])
+        scroll_view = MDScrollView(size_hint_y=None, height=dp(550))
 
-            def add_section(text):
-                lbl = MDLabel(text=text, theme_text_color='Custom', text_color=self.theme_cls.primary_color, font_style='Subtitle2', bold=True, size_hint_y=None, height=dp(40), padding=(dp(20), dp(10)))
-                content_list.add_widget(lbl)
+        def add_section(text):
+            lbl = MDLabel(text=text, theme_text_color='Custom', text_color=self.theme_cls.primary_color, font_style='Subtitle2', bold=True, size_hint_y=None, height=dp(30), padding=(dp(10), dp(5)))
+            content_list.add_widget(lbl)
 
-            def add_option(title, details, icon_name, action_callback, icon_color=None):
-                item = ClickableBox(orientation='horizontal', size_hint_y=None, padding=[dp(20), dp(12), dp(20), dp(12)], spacing=dp(20))
-                item.bind(minimum_height=item.setter('height'))
-                item.on_release = lambda *args: action_callback(None)
-                i_color = icon_color if icon_color else (0.4, 0.4, 0.4, 1)
-                icon = MDIcon(icon=icon_name, theme_text_color='Custom', text_color=i_color, pos_hint={'center_y': 0.5}, font_size='24sp', size_hint_x=None, width=dp(24))
-                text_box = MDBoxLayout(orientation='vertical', adaptive_height=True, pos_hint={'center_y': 0.5}, spacing=dp(4))
-                lbl_title = MDLabel(text=title, font_style='Subtitle1', theme_text_color='Primary', size_hint_y=None)
-                lbl_title.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
-                lbl_title.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
-                lbl_desc = MDLabel(text=details, font_style='Body2', theme_text_color='Secondary', size_hint_y=None)
-                lbl_desc.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
-                lbl_desc.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
-                text_box.add_widget(lbl_title)
-                text_box.add_widget(lbl_desc)
-                item.add_widget(icon)
-                item.add_widget(text_box)
-                content_list.add_widget(item)
-            add_section('ÉTAT DE LA LICENCE')
-            status, days_left = self.check_license_validity()
-            from kivy.core.clipboard import Clipboard
-            if status == 'ACTIVATED':
-                l_title = 'Licence : Activée'
-                l_icon = 'shield-check'
-                l_color = (0, 0.7, 0, 1)
-                device_id = self.get_device_id()
-                import hashlib
-                activ_key = hashlib.sha256(f'magpro_mobile_v6_{device_id}_secure_key'.encode()).hexdigest()
+        def add_option(title, details, icon_name, action_callback, icon_color=None):
+            item = ClickableBox(orientation='horizontal', size_hint_y=None, padding=[dp(15), dp(10), dp(15), dp(10)], spacing=dp(20))
+            item.bind(minimum_height=item.setter('height'))
+            item.on_release = lambda *args: action_callback(None)
+            i_color = icon_color if icon_color else (0.4, 0.4, 0.4, 1)
+            icon = MDIcon(icon=icon_name, theme_text_color='Custom', text_color=i_color, pos_hint={'center_y': 0.5}, font_size='24sp', size_hint_x=None, width=dp(24))
+            text_box = MDBoxLayout(orientation='vertical', adaptive_height=True, pos_hint={'center_y': 0.5}, spacing=dp(4))
+            lbl_title = MDLabel(text=title, font_style='Subtitle1', theme_text_color='Primary', size_hint_y=None)
+            lbl_title.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
+            lbl_title.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+            lbl_desc = MDLabel(text=details, font_style='Body2', theme_text_color='Secondary', size_hint_y=None)
+            lbl_desc.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
+            lbl_desc.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+            text_box.add_widget(lbl_title)
+            text_box.add_widget(lbl_desc)
+            item.add_widget(icon)
+            item.add_widget(text_box)
+            content_list.add_widget(item)
+        add_section('ÉTAT DE LA LICENCE')
+        status, days_left = self.check_license_validity()
+        if status == 'ACTIVATED':
+            l_title = 'Licence Activée'
+            l_icon = 'shield-check'
+            l_color = (0, 0.7, 0, 1)
+            device_id = self.get_device_id()
+            import hashlib
+            activ_key = hashlib.sha256(f'magpro_mobile_v6_{device_id}_secure_key'.encode()).hexdigest()
 
-                def copy_action(inst):
-                    Clipboard.copy(activ_key)
-                    self.notify("Clé d'activation copiée", 'success')
-                lic_card = MDCard(orientation='vertical', padding=dp(15), spacing=dp(10), size_hint_y=None, adaptive_height=True, md_bg_color=(0.95, 0.98, 0.95, 1), radius=[8], ripple_behavior=True)
-                lic_card.bind(on_release=copy_action)
-                top_row = MDBoxLayout(orientation='horizontal', adaptive_height=True, spacing=dp(10))
-                top_row.add_widget(MDIcon(icon=l_icon, theme_text_color='Custom', text_color=l_color, font_size='24sp', pos_hint={'center_y': 0.5}))
-                top_row.add_widget(MDLabel(text=l_title, font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=l_color, pos_hint={'center_y': 0.5}))
-                lic_card.add_widget(top_row)
-                lic_card.add_widget(MDLabel(text="Clé d'activation (Appuyez pour copier):", font_style='Caption', theme_text_color='Secondary'))
-                lic_card.add_widget(MDLabel(text=activ_key, font_style='Caption', theme_text_color='Primary', font_name='Roboto', bold=True, adaptive_height=True))
-                content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
-                content_list.add_widget(lic_card)
-                content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
-            else:
-                l_title = f"Période d'essai : {days_left} jours restants"
-                l_icon = 'shield-alert'
-                l_color = (1, 0.6, 0, 1)
-                device_id = self.get_device_id()
+            def copy_action(inst):
+                Clipboard.copy(activ_key)
+                self.notify("Clé d'activation copiée", 'success')
+            lic_card = MDCard(orientation='vertical', padding=dp(12), spacing=dp(5), size_hint_y=None, adaptive_height=True, md_bg_color=(0.95, 0.98, 0.95, 1), radius=[12], ripple_behavior=True)
+            lic_card.bind(on_release=copy_action)
+            top_row = MDBoxLayout(orientation='horizontal', adaptive_height=True, spacing=dp(10))
+            top_row.add_widget(MDIcon(icon=l_icon, theme_text_color='Custom', text_color=l_color, font_size='24sp', pos_hint={'center_y': 0.5}))
+            top_row.add_widget(MDLabel(text=l_title, font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=l_color, pos_hint={'center_y': 0.5}))
+            lic_card.add_widget(top_row)
+            lic_card.add_widget(MDLabel(text='Clé (Appuyez pour copier):', font_style='Caption', theme_text_color='Secondary'))
+            lic_card.add_widget(MDLabel(text=activ_key, font_style='Caption', theme_text_color='Primary', font_name='Roboto', bold=True, adaptive_height=True))
+        else:
+            l_title = f'Essai : {days_left} jours restants'
+            l_icon = 'shield-alert'
+            l_color = (1, 0.6, 0, 1)
+            device_id = self.get_device_id()
 
-                def copy_action(inst):
-                    Clipboard.copy(device_id)
-                    self.notify('ID copié dans le presse-papiers', 'success')
-                lic_card = MDCard(orientation='vertical', padding=dp(15), spacing=dp(10), size_hint_y=None, adaptive_height=True, md_bg_color=(1, 0.95, 0.9, 1), radius=[8], ripple_behavior=True)
-                lic_card.bind(on_release=copy_action)
-                top_row = MDBoxLayout(orientation='horizontal', adaptive_height=True, spacing=dp(10))
-                top_row.add_widget(MDIcon(icon=l_icon, theme_text_color='Custom', text_color=l_color, font_size='24sp', pos_hint={'center_y': 0.5}))
-                top_row.add_widget(MDLabel(text=l_title, font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=l_color, pos_hint={'center_y': 0.5}))
-                lic_card.add_widget(top_row)
-                lic_card.add_widget(MDLabel(text='ID Appareil (Appuyez pour copier):', font_style='Caption', theme_text_color='Secondary'))
-                lic_card.add_widget(MDLabel(text=device_id, font_style='Caption', theme_text_color='Primary', font_name='Roboto', bold=True, adaptive_height=True))
-                content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
-                content_list.add_widget(lic_card)
-                content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
-            import webbrowser
-            add_section('APPLICATION')
-            add_option('Mise à jour', "Télécharger la nouvelle version de l'application", 'cloud-download', lambda x: [self.dialog.dismiss(), webbrowser.open('https://vendeur.magpro-soft.com/')])
-            if not self.is_seller_mode:
-                add_section('CONNEXION SERVEUR')
-                ip_desc = f'Local: {self.local_server_ip}'
-                if self.external_server_ip:
-                    ip_desc += f'\nExt: {self.external_server_ip}'
-                add_option('Configuration IP', ip_desc, 'lan-connect', self.show_ip_config_dialog)
-                add_section('IMPRIMANTE (Bluetooth)')
-                printer_conf = {'name': 'Non configurée', 'mac': '', 'auto': False}
-                if self.store.exists('printer_config'):
-                    printer_conf = self.store.get('printer_config')
-                p_name = printer_conf.get('name', 'Non configurée') or 'Non configurée'
-                add_option('Choisir Imprimante', f'Actuelle: {p_name}', 'printer-wireless', lambda x: [self.dialog.dismiss(), self.open_bluetooth_selector(x)])
-                add_option("Oublier l'imprimante", "Déconnecter l'appareil actuel", 'printer-off', lambda x: self.clear_printer_selection(x), icon_color=(0.8, 0, 0, 1))
-                auto_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(10)))
-                auto_layout.bind(minimum_height=auto_layout.setter('height'))
-                lbl_auto = MDLabel(text='Impression Auto après validation', theme_text_color='Primary', size_hint_x=0.8, size_hint_y=None)
-                lbl_auto.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
-                lbl_auto.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
-                chk_auto = MDCheckbox(active=printer_conf.get('auto', False), size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_y': 0.5})
-                chk_auto.bind(active=self.toggle_auto_print_setting)
-                auto_layout.add_widget(lbl_auto)
-                auto_layout.add_widget(chk_auto)
-                content_list.add_widget(auto_layout)
-                add_section('AFFICHAGE')
-                current_screen_state = True
-                if self.store.exists('screen_config'):
-                    current_screen_state = self.store.get('screen_config').get('keep_on', True)
-                screen_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(10)))
-                screen_layout.bind(minimum_height=screen_layout.setter('height'))
-                lbl_screen = MDLabel(text="Garder l'écran allumé\n(Requis pour le bon fonctionnement du GPS)", theme_text_color='Primary', size_hint_x=0.8, font_style='Body1', size_hint_y=None)
-                lbl_screen.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
-                lbl_screen.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
-                chk_screen = MDCheckbox(active=current_screen_state, size_hint=(None, None), size=(dp(48), dp(48)), pos_hint={'center_y': 0.5})
-                chk_screen.bind(active=lambda inst, val: self.set_screen_keep_alive(val))
-                screen_layout.add_widget(lbl_screen)
-                screen_layout.add_widget(chk_screen)
-                content_list.add_widget(screen_layout)
-            scroll_view.add_widget(content_list)
-            self.dialog = MDDialog(title='Paramètres', type='custom', content_cls=scroll_view, buttons=[MDFlatButton(text='FERMER', theme_text_color='Custom', text_color=self.theme_cls.primary_color, on_release=lambda x: self.dialog.dismiss())], size_hint=(0.95, None))
-            self.dialog.open()
-        except Exception as e:
-            self.notify(f'Erreur Menu: {e}', 'error')
+            def copy_action(inst):
+                Clipboard.copy(device_id)
+                self.notify('ID copié', 'success')
+            lic_card = MDCard(orientation='vertical', padding=dp(12), spacing=dp(5), size_hint_y=None, adaptive_height=True, md_bg_color=(1, 0.95, 0.9, 1), radius=[12], ripple_behavior=True)
+            lic_card.bind(on_release=copy_action)
+            top_row = MDBoxLayout(orientation='horizontal', adaptive_height=True, spacing=dp(10))
+            top_row.add_widget(MDIcon(icon=l_icon, theme_text_color='Custom', text_color=l_color, font_size='24sp', pos_hint={'center_y': 0.5}))
+            top_row.add_widget(MDLabel(text=l_title, font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=l_color, pos_hint={'center_y': 0.5}))
+            lic_card.add_widget(top_row)
+            lic_card.add_widget(MDLabel(text='ID Appareil (Appuyez pour copier):', font_style='Caption', theme_text_color='Secondary'))
+            lic_card.add_widget(MDLabel(text=device_id, font_style='Caption', theme_text_color='Primary', font_name='Roboto', bold=True, adaptive_height=True))
+        box_lic = MDBoxLayout(padding=[dp(10), 0, dp(10), 0], adaptive_height=True)
+        box_lic.add_widget(lic_card)
+        content_list.add_widget(box_lic)
+        if not self.is_seller_mode:
+            content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
+            add_section('VOS MAGASINS / SERVEURS')
+            data = self.store.get('servers_config')
+            servers = data.get('list', [])
+            active_idx = data.get('active_index', 0)
+            stores_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(10), dp(0), dp(10), dp(10)])
+            for i, srv in enumerate(servers):
+                is_active = i == active_idx
+                card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(60), padding=[dp(15), dp(5), dp(15), dp(5)], spacing=dp(15), radius=[12], md_bg_color=(0.9, 0.97, 0.9, 1) if is_active else (0.95, 0.95, 0.95, 1), elevation=1, ripple_behavior=True, on_release=lambda x, idx=i: self.open_edit_server_dialog(idx))
+                icon_name = 'check-circle' if is_active else 'store-outline'
+                icon_color = (0, 0.6, 0.2, 1) if is_active else (0.5, 0.5, 0.5, 1)
+                card.add_widget(MDIcon(icon=icon_name, theme_text_color='Custom', text_color=icon_color, font_size='26sp', pos_hint={'center_y': 0.5}))
+                card.add_widget(MDLabel(text=self.fix_text(srv.get('name', 'Inconnu')), bold=is_active, font_name='ArabicFont', font_size='17sp', theme_text_color='Primary'))
+                card.add_widget(MDIcon(icon='chevron-right', theme_text_color='Hint', font_size='24sp', pos_hint={'center_y': 0.5}))
+                stores_layout.add_widget(card)
+            content_list.add_widget(stores_layout)
+            btns_store = MDBoxLayout(padding=[dp(10), 0, dp(10), 0], adaptive_height=True)
+            btns_store.add_widget(MDFillRoundFlatIconButton(text='Ajouter un magasin', icon='plus-circle', font_size='15sp', size_hint_x=1, height=dp(48), md_bg_color=(0.1, 0.5, 0.8, 1), on_release=lambda x: self.open_edit_server_dialog(None)))
+            content_list.add_widget(btns_store)
+        content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
+        add_section('IMPRIMANTE (Bluetooth)')
+        printer_conf = {'name': 'Non configurée', 'mac': '', 'auto': False}
+        if self.store.exists('printer_config'):
+            printer_conf = self.store.get('printer_config')
+        p_name = printer_conf.get('name', 'Non configurée') or 'Non configurée'
+        add_option('Choisir Imprimante', f'Actuelle: {p_name}', 'printer-wireless', lambda x: [self.dialog.dismiss(), self.open_bluetooth_selector(x)])
+        add_option("Oublier l'imprimante", "Déconnecter l'appareil actuel", 'printer-off', lambda x: self.clear_printer_selection(x), icon_color=(0.8, 0, 0, 1))
+        auto_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(5)))
+        auto_layout.bind(minimum_height=auto_layout.setter('height'))
+        lbl_auto = MDLabel(text='Impression Auto après validation', theme_text_color='Primary', size_hint_x=0.8, size_hint_y=None)
+        lbl_auto.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
+        lbl_auto.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        chk_auto = MDCheckbox(active=printer_conf.get('auto', False), size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_y': 0.5})
+        chk_auto.bind(active=self.toggle_auto_print_setting)
+        auto_layout.add_widget(lbl_auto)
+        auto_layout.add_widget(chk_auto)
+        content_list.add_widget(auto_layout)
+        add_section('AFFICHAGE')
+        current_screen_state = True
+        if self.store.exists('screen_config'):
+            current_screen_state = self.store.get('screen_config').get('keep_on', True)
+        screen_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(5)))
+        screen_layout.bind(minimum_height=screen_layout.setter('height'))
+        lbl_screen = MDLabel(text="Garder l'écran allumé\n(Requis pour le bon fonctionnement du GPS)", theme_text_color='Primary', size_hint_x=0.8, font_style='Body1', size_hint_y=None)
+        lbl_screen.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
+        lbl_screen.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        chk_screen = MDCheckbox(active=current_screen_state, size_hint=(None, None), size=(dp(48), dp(48)), pos_hint={'center_y': 0.5})
+        chk_screen.bind(active=lambda inst, val: self.set_screen_keep_alive(val))
+        screen_layout.add_widget(lbl_screen)
+        screen_layout.add_widget(chk_screen)
+        content_list.add_widget(screen_layout)
+        content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
+        add_section('APPLICATION')
+        btns_app = MDBoxLayout(padding=[dp(10), 0, dp(10), dp(10)], adaptive_height=True)
+        btns_app.add_widget(MDFillRoundFlatIconButton(text="Mise à jour de l'application", icon='cloud-download', font_size='15sp', md_bg_color=(0.2, 0.6, 0.6, 1), text_color=(1, 1, 1, 1), size_hint_x=1, height=dp(48), on_release=lambda x: [self.dialog.dismiss(), webbrowser.open('https://vendeur.magpro-soft.com/')]))
+        content_list.add_widget(btns_app)
+        scroll_view.add_widget(content_list)
+        self.dialog = MDDialog(title='Paramètres', type='custom', content_cls=scroll_view, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='FERMER', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())], size_hint=(0.95, None))
+        self.dialog.open()
 
-    def show_ip_config_dialog(self, instance=None):
-        if hasattr(self, 'ip_dialog') and getattr(self, 'ip_dialog', None):
-            self.ip_dialog.dismiss()
-        content = MDBoxLayout(orientation='vertical', spacing='15dp', size_hint_y=None, height=dp(250), padding=[0, dp(10), 0, 0])
-        saved_pin = ''
-        if self.store.exists('config'):
-            saved_pin = str(self.store.get('config').get('server_pin', ''))
-        self.field_local_ip = MDTextField(text=self.local_server_ip, hint_text='IP Locale (Wifi)', icon_right='router-wireless')
-        self.field_ext_ip = MDTextField(text=self.external_server_ip, hint_text='IP Externe (Internet)', icon_right='web')
-        self.field_server_pin = MDTextField(text=saved_pin, hint_text='Code PIN du Serveur (Cloudflare)', icon_right='lock-outline', password=True)
-        content.add_widget(self.field_local_ip)
-        content.add_widget(self.field_ext_ip)
-        content.add_widget(self.field_server_pin)
+    def open_edit_server_dialog(self, index):
+        if hasattr(self, 'dialog') and getattr(self, 'dialog', None):
+            self.dialog.dismiss()
+        import re
+        from kivy.clock import Clock
+        from kivy.animation import Animation
+        is_new = index is None
+        srv_name = ''
+        srv_local = '192.168.1.100'
+        srv_ext = ''
+        srv_pin = ''
+        if not is_new:
+            data = self.store.get('servers_config')
+            servers = data.get('list', [])
+            srv = servers[index]
+            srv_name = srv.get('name', '')
+            srv_local = srv.get('local_ip', '192.168.1.100')
+            srv_ext = srv.get('ext_ip', '')
+            srv_pin = srv.get('pin', '')
+        content = MDBoxLayout(orientation='vertical', spacing=dp(20), size_hint_y=None, adaptive_height=True, padding=[0, dp(5), 0, 0])
+        spacer = MDBoxLayout(size_hint_y=None, height=dp(30))
+        content.add_widget(spacer)
+        self.field_srv_name = SmartTextField(text=srv_name, hint_text='Nom du Magasin', mode='rectangle', icon_right='store')
+        self.field_srv_local = MDTextField(text=srv_local, hint_text='IP Locale (Wifi)', mode='rectangle', icon_right='router-wireless')
+        self.field_srv_ext = MDTextField(text=srv_ext, hint_text='IP Externe (Internet / Cloudflare)', mode='rectangle', icon_right='web')
+        initial_has_letters = bool(srv_ext.strip() and re.search('[a-zA-Z]', srv_ext))
+        initial_height = dp(75) if initial_has_letters else 0
+        initial_opacity = 1 if initial_has_letters else 0
+        self.pin_container = MDBoxLayout(orientation='vertical', size_hint_y=None, height=initial_height, opacity=initial_opacity)
+        self.field_srv_pin = MDTextField(text=srv_pin, hint_text='Code PIN du Serveur', mode='rectangle', icon_right='lock-outline', password=True)
+        self.field_srv_pin.disabled = not initial_has_letters
+        self.pin_container.add_widget(self.field_srv_pin)
+        content.add_widget(self.field_srv_name)
+        content.add_widget(self.field_srv_local)
+        content.add_widget(self.field_srv_ext)
+        content.add_widget(self.pin_container)
 
-        def on_ext_ip_change(instance, text):
-            import re
-            if re.search('[a-zA-Z]', text):
-                self.field_server_pin.opacity = 1
-                self.field_server_pin.disabled = False
-            else:
-                self.field_server_pin.opacity = 0
-                self.field_server_pin.disabled = True
-        self.field_ext_ip.bind(text=on_ext_ip_change)
-        on_ext_ip_change(self.field_ext_ip, self.field_ext_ip.text)
-        self.ip_dialog = MDDialog(title='Configuration Serveur', type='custom', content_cls=content, buttons=[MDFlatButton(text='ANNULER', on_release=lambda x: [self.ip_dialog.dismiss(), self.open_ip_settings()]), MDRaisedButton(text='SAUVEGARDER', md_bg_color=(0, 0.6, 0, 1), on_release=self.save_ip_new_logic)])
-        self.ip_dialog.open()
+        def check_ext_ip(instance, text):
+            has_letters = bool(text.strip() and re.search('[a-zA-Z]', text))
+            if has_letters and self.pin_container.height == 0:
+                self.field_srv_pin.disabled = False
+                anim = Animation(height=dp(75), opacity=1, d=0.25)
+                anim.start(self.pin_container)
+            elif not has_letters and self.pin_container.height > 0:
+                self.field_srv_pin.disabled = True
+                self.field_srv_pin.text = ''
+                anim = Animation(height=0, opacity=0, d=0.2)
+                anim.start(self.pin_container)
+        self.field_srv_ext.bind(text=check_ext_ip)
+        buttons = [MDFlatButton(text='ANNULER', on_release=lambda x: [self.dialog_edit_srv.dismiss(), self.open_ip_settings()])]
+        if not is_new:
+            buttons.append(MDRaisedButton(text='SUPPRIMER', md_bg_color=(0.8, 0.2, 0.2, 1), on_release=lambda x: self.delete_server_config(index)))
+        buttons.append(MDRaisedButton(text='ENREGISTRER', md_bg_color=(0, 0.6, 0.2, 1), on_release=lambda x: self.save_server_config(index)))
+        title_text = 'Nouveau Magasin' if is_new else f'Détails : {self.fix_text(srv_name)}'
+        self.dialog_edit_srv = MDDialog(title=title_text, type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=buttons)
+        self.dialog_edit_srv.open()
+        Clock.schedule_once(lambda dt: setattr(self.field_srv_name, 'focus', True), 0.3)
+
+    def save_server_config(self, index):
+        name = self.field_srv_name.get_value().strip()
+        local_ip = self.field_srv_local.text.strip()
+        ext_ip = self.field_srv_ext.text.strip()
+        pin = self.field_srv_pin.text.strip()
+        if not name:
+            self.notify('Le nom du magasin est obligatoire', 'error')
+            return
+        new_srv = {'name': name, 'local_ip': local_ip, 'ext_ip': ext_ip, 'pin': pin}
+        data = self.store.get('servers_config')
+        servers = data.get('list', [])
+        if index is None:
+            servers.append(new_srv)
+            idx_to_select = len(servers) - 1
+        else:
+            servers[index] = new_srv
+            idx_to_select = data.get('active_index', 0)
+        self.store.put('servers_config', list=servers, active_index=idx_to_select)
+        self.apply_active_server()
+        self.notify('Configuration sauvegardée', 'success')
+        self.dialog_edit_srv.dismiss()
+        self.open_ip_settings()
+
+    def delete_server_config(self, index):
+        data = self.store.get('servers_config')
+        servers = data.get('list', [])
+        active_idx = data.get('active_index', 0)
+        if len(servers) <= 1:
+            self.notify('Impossible de supprimer le seul magasin', 'error')
+            return
+        del servers[index]
+        if active_idx == index:
+            active_idx = 0
+        elif active_idx > index:
+            active_idx -= 1
+        self.store.put('servers_config', list=servers, active_index=active_idx)
+        self.apply_active_server()
+        self.notify('Magasin supprimé', 'success')
+        self.dialog_edit_srv.dismiss()
+        self.open_ip_settings()
 
     def save_ip_new_logic(self, instance):
         local_ip = self.field_local_ip.text.strip()
