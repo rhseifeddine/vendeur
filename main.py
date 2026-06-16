@@ -1040,17 +1040,28 @@ class StockApp(MDApp):
                         target_prods = list(res.values())
                 elif isinstance(res, list):
                     target_prods = res
-                target_barcodes = set()
+                target_barcodes_map = {}
                 for p in target_prods:
                     bc = str(p.get('barcode', '')).strip()
                     if bc:
-                        target_barcodes.add(bc)
-                filtered_local_products = []
-                for p in self.all_products_raw:
-                    bc = str(p.get('barcode', '')).strip()
-                    if bc and bc in target_barcodes:
-                        filtered_local_products.append(p)
-                self.remote_filtered_products = filtered_local_products
+                        target_barcodes_map[bc] = p
+                filtered_local_products_out = []
+                filtered_local_products_in = []
+                for lp in self.all_products_raw:
+                    bc = str(lp.get('barcode', '')).strip()
+                    if bc and bc in target_barcodes_map:
+                        filtered_local_products_out.append(lp)
+                        rp = target_barcodes_map[bc]
+                        mapped_p = lp.copy()
+                        mapped_p['stock'] = rp.get('stock', 0)
+                        if 'real_stock_store' in rp:
+                            mapped_p['real_stock_store'] = rp.get('real_stock_store', 0)
+                        elif 'stock_store' in rp:
+                            mapped_p['stock_store'] = rp.get('stock_store', 0)
+                        mapped_p['stock_warehouse'] = rp.get('stock_warehouse', 0)
+                        filtered_local_products_in.append(mapped_p)
+                self.remote_filtered_products_out = filtered_local_products_out
+                self.remote_filtered_products_in = filtered_local_products_in
                 self.current_mode = mode_transfert
                 self.cart = []
                 self.selected_entity = {'id': 1, 'name': 'COMPTOIR'}
@@ -1063,7 +1074,10 @@ class StockApp(MDApp):
                     self.prod_search_layout.remove_widget(self.btn_add_prod)
                 if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
                     self.prod_search_layout.add_widget(self.btn_scan_prod)
-                self.current_product_list_source = self.remote_filtered_products
+                if mode_transfert == 'remote_transfer_in':
+                    self.current_product_list_source = self.remote_filtered_products_in
+                else:
+                    self.current_product_list_source = self.remote_filtered_products_out
                 self.load_more_products(reset=True)
                 self.sm.current = 'products'
                 self.notify('Produits compatibles chargés avec succès.', 'success')
@@ -1101,8 +1115,11 @@ class StockApp(MDApp):
 
     def _search_worker(self, query):
         base_list = self.all_products_raw
-        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange'] and hasattr(self, 'remote_filtered_products'):
-            base_list = self.remote_filtered_products
+        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            if self.current_mode == 'remote_transfer_in' or (self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 2):
+                base_list = getattr(self, 'remote_filtered_products_in', [])
+            else:
+                base_list = getattr(self, 'remote_filtered_products_out', [])
         if not query:
             self._prepare_and_send_data(base_list[:50])
             return
@@ -2520,8 +2537,8 @@ class StockApp(MDApp):
             self.update_cart_button()
             self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
             self.notify('Envoi validé. Sélectionnez maintenant ce que vous recevez.', 'info')
-            if hasattr(self, 'remote_filtered_products'):
-                self.current_product_list_source = self.remote_filtered_products
+            if hasattr(self, 'remote_filtered_products_in'):
+                self.current_product_list_source = self.remote_filtered_products_in
                 self.load_more_products(reset=True)
             self.sm.transition.direction = 'right'
             self.sm.current = 'products'
@@ -3874,7 +3891,13 @@ class StockApp(MDApp):
             url = f'{self.api_base}/api/products?category={encoded_cat}&limit=999999'
             UrlRequest(url, on_success=self.on_products_loaded)
         else:
-            base_list = self.remote_filtered_products if is_remote_mode and hasattr(self, 'remote_filtered_products') else self.all_products_raw
+            if is_remote_mode:
+                if self.current_mode == 'remote_transfer_in' or (self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 2):
+                    base_list = getattr(self, 'remote_filtered_products_in', [])
+                else:
+                    base_list = getattr(self, 'remote_filtered_products_out', [])
+            else:
+                base_list = self.all_products_raw
             if category_name == 'Tout' or category_name == 'TOUS':
                 self.current_product_list_source = base_list
             else:
@@ -4686,7 +4709,13 @@ class StockApp(MDApp):
             url = f'{self.api_base}/api/products?category={encoded_cat}'
             UrlRequest(url, on_success=self.on_products_loaded)
         else:
-            base_list = self.remote_filtered_products if is_remote_mode and hasattr(self, 'remote_filtered_products') else self.all_products_raw
+            if is_remote_mode:
+                if self.current_mode == 'remote_transfer_in' or (self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 2):
+                    base_list = getattr(self, 'remote_filtered_products_in', [])
+                else:
+                    base_list = getattr(self, 'remote_filtered_products_out', [])
+            else:
+                base_list = self.all_products_raw
             if category_name == 'Tout' or category_name == 'TOUS':
                 self.current_product_list_source = base_list
             else:
@@ -7241,8 +7270,11 @@ class StockApp(MDApp):
             return
         prod = None
         base_list = self.all_products_raw
-        if self.current_mode == 'remote_transfer' and hasattr(self, 'remote_filtered_products'):
-            base_list = self.remote_filtered_products
+        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            if self.current_mode == 'remote_transfer_in' or (self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 2):
+                base_list = getattr(self, 'remote_filtered_products_in', [])
+            else:
+                base_list = getattr(self, 'remote_filtered_products_out', [])
         for p in base_list:
             p_code = str(p.get('barcode', '')).strip()
             if p_code == code:
@@ -7259,7 +7291,7 @@ class StockApp(MDApp):
             self.play_sound('success')
         else:
             self.play_sound('error')
-            if self.current_mode == 'remote_transfer':
+            if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
                 self.notify("Produit introuvable ou incompatible avec l'autre magasin.", 'error')
             else:
                 self.show_not_found_alert(code)
