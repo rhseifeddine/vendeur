@@ -616,6 +616,8 @@ class StockApp(MDApp):
         self.sync_selected_stores = {i: True for i in range(len(self.sync_servers_list))}
         self.sync_status_icons = {}
         self.sync_checkboxes = {}
+        self.sync_status_labels = {}
+        
         from kivymd.uix.selectioncontrol import MDCheckbox
         from kivymd.uix.card import MDCard
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing=dp(15), padding=[0, dp(10), 0, 0])
@@ -634,9 +636,16 @@ class StockApp(MDApp):
             chk.bind(active=lambda inst, val, idx=original_idx: self._toggle_sync_store(idx, val))
             self.sync_checkboxes[original_idx] = chk
             card.add_widget(chk)
-            lbl_name = MDLabel(text=srv_name, bold=True, font_style='Subtitle2', theme_text_color='Primary', pos_hint={'center_y': 0.5})
-            card.add_widget(lbl_name)
-            icon_status = MDIcon(icon='sync', theme_text_color='Hint', font_size='26sp', pos_hint={'center_y': 0.5})
+            
+            txt_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=0)
+            lbl_name = MDLabel(text=srv_name, bold=True, font_style='Subtitle2', theme_text_color='Primary')
+            lbl_status = MDLabel(text='Vérification...', font_style='Caption', theme_text_color='Hint')
+            self.sync_status_labels[original_idx] = lbl_status
+            txt_box.add_widget(lbl_name)
+            txt_box.add_widget(lbl_status)
+            card.add_widget(txt_box)
+            
+            icon_status = MDIcon(icon='wifi-sync', theme_text_color='Hint', font_size='26sp', pos_hint={'center_y': 0.5})
             self.sync_status_icons[original_idx] = icon_status
             card.add_widget(icon_status)
             list_layout.add_widget(card)
@@ -646,88 +655,102 @@ class StockApp(MDApp):
         self.btn_start_sync = MDRaisedButton(text='DÉMARRER', md_bg_color=(0.1, 0.5, 0.8, 1), disabled=True, on_release=self.execute_articles_sync)
         self.sync_articles_dialog = MDDialog(title='Sélection des Magasins', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.sync_articles_dialog.dismiss()), self.btn_start_sync])
         self.sync_articles_dialog.open()
-        import threading
-        threading.Thread(target=self._check_sync_connections, daemon=True).start()
+        
+        self._check_sync_connections()
 
-    @mainthread
+    def _toggle_sync_store(self, index, is_active):
+        self.sync_selected_stores[index] = is_active
+
+    def _check_sync_connections(self):
+        self.ping_completed_count = 0
+        self.total_pings = len(self.sync_servers_list)
+        if self.total_pings == 0:
+            self.btn_start_sync.disabled = False
+            return
+            
+        for i, srv in enumerate(self.sync_servers_list):
+            self._ping_store_async(i, srv)
+
+    def _ping_store_async(self, index, srv):
+        import re
+        local_ip = srv.get('local_ip', '').strip()
+        ext_ip = srv.get('ext_ip', '').strip()
+        urls_to_test = []
+        for ip in [ext_ip, local_ip]:
+            if not ip: continue
+            if 'http' in ip: urls_to_test.append(ip.rstrip('/'))
+            elif re.search('[a-zA-Z]', ip): urls_to_test.append(f"https://{ip.rstrip('/')}")
+            elif ':' in ip: urls_to_test.append(f"http://{ip.rstrip('/')}")
+            else: urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}")
+            
+        self._test_next_url(index, urls_to_test, 0)
+
+    def _test_next_url(self, index, urls, url_idx):
+        if url_idx >= len(urls):
+            self._update_sync_status_ui(index, None, False)
+            self._check_ping_done()
+            return
+            
+        test_url = urls[url_idx]
+        ping_url = f"{test_url}/api/ping"
+        
+        def on_success(req, res):
+            self._update_sync_status_ui(index, test_url, True)
+            self._check_ping_done()
+            
+        def on_fail(req, err):
+            self._test_next_url(index, urls, url_idx + 1)
+            
+        OriginalUrlRequest(ping_url, on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=4)
+
+    def _check_ping_done(self):
+        self.ping_completed_count += 1
+        if self.ping_completed_count >= self.total_pings:
+            self.btn_start_sync.disabled = False
+
     def _update_sync_status_ui(self, index, working_url, is_online):
         if not hasattr(self, 'sync_articles_dialog') or not self.sync_articles_dialog:
             return
         self.sync_servers_list[index]['_working_url'] = working_url
         icon_widget = self.sync_status_icons.get(index)
         chk_widget = self.sync_checkboxes.get(index)
+        lbl_widget = self.sync_status_labels.get(index)
+        
         if is_online:
             icon_widget.icon = 'wifi'
             icon_widget.text_color = (0, 0.7, 0, 1)
             icon_widget.theme_text_color = 'Custom'
+            lbl_widget.text = 'En ligne'
+            lbl_widget.theme_text_color = 'Custom'
+            lbl_widget.text_color = (0, 0.7, 0, 1)
         else:
             icon_widget.icon = 'wifi-off'
             icon_widget.text_color = (0.8, 0, 0, 1)
             icon_widget.theme_text_color = 'Custom'
+            lbl_widget.text = 'Hors ligne'
+            lbl_widget.theme_text_color = 'Error'
             chk_widget.active = False
             chk_widget.disabled = True
             self.sync_selected_stores[index] = False
 
-    def _toggle_sync_store(self, index, is_active):
-        self.sync_selected_stores[index] = is_active
-
-    def _get_working_url_helper(self, srv):
-        import requests
-        import urllib3
-        import re
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        local_ip = srv.get('local_ip', '').strip()
-        ext_ip = srv.get('ext_ip', '').strip()
-        urls_to_test = []
-        for ip in [ext_ip, local_ip]:
-            if not ip:
-                continue
-            if 'http' in ip:
-                urls_to_test.append(ip.rstrip('/'))
-            elif re.search('[a-zA-Z]', ip):
-                urls_to_test.append(f"https://{ip.rstrip('/')}")
-            elif ':' in ip:
-                urls_to_test.append(f"http://{ip.rstrip('/')}")
-            else:
-                urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}")
-        for test_url in urls_to_test:
-            try:
-                res = requests.get(f'{test_url}/api/ping', timeout=8, verify=False)
-                if res.status_code == 200:
-                    return test_url
-            except Exception as e:
-                continue
-        return None
-
-    def _check_sync_connections(self):
-        for i, srv in enumerate(self.sync_servers_list):
-            working_url = self._get_working_url_helper(srv)
-            is_online = working_url is not None
-            from kivy.clock import Clock
-            Clock.schedule_once(lambda dt, idx=i, url=working_url, online=is_online: self._update_sync_status_ui(idx, url, online), 0)
-        from kivy.clock import Clock
-        Clock.schedule_once(lambda dt: setattr(self.btn_start_sync, 'disabled', False), 0)
-
     def execute_articles_sync(self, instance):
-        if getattr(self, 'is_syncing_articles', False):
-            return
+        if getattr(self, 'is_syncing_articles', False): return
         has_selection = any(self.sync_selected_stores.values())
         if not has_selection:
             self.notify('Veuillez sélectionner au moins un magasin valide.', 'error')
             return
+            
         if hasattr(self, 'sync_articles_dialog') and self.sync_articles_dialog:
             self.sync_articles_dialog.dismiss()
+            
         self.is_syncing_articles = True
-        if hasattr(self, 'loading_sync_dialog') and self.loading_sync_dialog:
-            try:
-                self.loading_sync_dialog.dismiss()
-            except:
-                pass
+        
         from kivymd.uix.progressbar import MDProgressBar
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.label import MDLabel
         from kivymd.uix.dialog import MDDialog
         from kivy.metrics import dp
+        
         loading_content = MDBoxLayout(orientation='vertical', spacing=dp(15), padding=dp(20), size_hint_y=None, height=dp(140))
         self.lbl_sync_step = MDLabel(text='Initialisation...', theme_text_color='Primary', bold=True, halign='center')
         self.sync_progress_bar = MDProgressBar(value=0, max=100, color=(0.1, 0.5, 0.8, 1))
@@ -735,175 +758,161 @@ class StockApp(MDApp):
         loading_content.add_widget(self.lbl_sync_step)
         loading_content.add_widget(self.sync_progress_bar)
         loading_content.add_widget(self.lbl_sync_detail)
+        
         self.loading_sync_dialog = MDDialog(title='Synchronisation Rapide', type='custom', content_cls=loading_content, auto_dismiss=False, radius=[15, 15, 15, 15])
         self.loading_sync_dialog.open()
-        import threading
-        threading.Thread(target=self._sync_articles_worker, daemon=True).start()
+        
+        self.sync_selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
+        self.sync_report_data = {}
+        for i in self.sync_selected_indexes:
+            srv = self.sync_servers_list[i]
+            self.sync_report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
+            
+        self._start_sync_phase_1()
 
-    @mainthread
     def _update_sync_ui_progress(self, percent, step_text, detail_text=''):
         if hasattr(self, 'sync_progress_bar'):
             self.sync_progress_bar.value = percent
             self.lbl_sync_step.text = step_text
             self.lbl_sync_detail.text = detail_text if detail_text else f'{int(percent)}%'
 
-    def _sync_articles_worker(self):
-        import requests
-        import urllib3
-        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        from kivy.clock import Clock
-        import time
-
-        selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
-        total_stores = len(selected_indexes)
-        
-        if total_stores == 0:
-            Clock.schedule_once(lambda dt: self.show_sync_report({}), 0)
+    def _start_sync_phase_1(self):
+        self._update_sync_ui_progress(10, 'Étape 1/2 : Génération', 'Traitement des articles sans code-barres...')
+        self.sync_completed_count = 0
+        if not self.sync_selected_indexes:
+            self.show_sync_report(self.sync_report_data)
             return
-
-        report_data = {}
-        for i in selected_indexes:
-            srv = self.sync_servers_list[i]
-            report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
-
-        self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...')
-
-        def generate_barcodes(idx):
+            
+        for idx in self.sync_selected_indexes:
             srv = self.sync_servers_list[idx]
             url = srv.get('_working_url')
-            if not url:
-                return
             headers = {'Content-type': 'application/json'}
-            if srv.get('pin'):
-                headers['X-Server-PIN'] = str(srv.get('pin'))
-            try:
-                requests.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20, verify=False)
-            except Exception as e:
-                print(f"Android Sync Gen Barcode Error: {e}")
+            if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
+            
+            def on_done(req, res, current_idx=idx):
+                self._on_phase_1_task_done()
+                
+            OriginalUrlRequest(f'{url}/api/generate_barcodes', req_body="{}", req_headers=headers, method='POST', on_success=on_done, on_failure=on_done, on_error=on_done, timeout=15)
 
-        for idx in selected_indexes:
-            generate_barcodes(idx)
+    def _on_phase_1_task_done(self):
+        self.sync_completed_count += 1
+        if self.sync_completed_count == len(self.sync_selected_indexes):
+            self._start_sync_phase_2()
 
-        self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...')
-        store_catalogs = {}
-
-        def fetch_catalog(idx):
+    def _start_sync_phase_2(self):
+        self._update_sync_ui_progress(40, 'Étape 2/2 : Unification', 'Téléchargement des catalogues...')
+        self.sync_completed_count = 0
+        self.store_catalogs = {}
+        self.master_catalog = {}
+        
+        for idx in self.sync_selected_indexes:
             srv = self.sync_servers_list[idx]
             url = srv.get('_working_url')
-            if not url:
-                return (idx, None)
             headers = {'Content-type': 'application/json'}
-            if srv.get('pin'):
-                headers['X-Server-PIN'] = str(srv.get('pin'))
-            try:
-                res = requests.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40, verify=False)
-                if res.status_code == 200:
-                    return (idx, res.json())
-            except Exception as e:
-                print(f"Android Sync Fetch Error: {e}")
-            return (idx, None)
-
-        results = []
-        for idx in selected_indexes:
-            results.append(fetch_catalog(idx))
-
-        master_catalog = {}
-        self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...')
-
-        for idx, prods_data in results:
-            if prods_data:
+            if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
+            
+            def on_success(req, res, current_idx=idx):
                 prods_list = []
-                if isinstance(prods_data, dict):
-                    if 'data' in prods_data and isinstance(prods_data['data'], list):
-                        prods_list = prods_data['data']
-                    elif 'products' in prods_data and isinstance(prods_data['products'], list):
-                        prods_list = prods_data['products']
-                    else:
-                        prods_list = list(prods_data.values())
-                elif isinstance(prods_data, list):
-                    prods_list = prods_data
-
+                if isinstance(res, dict):
+                    if 'data' in res and isinstance(res['data'], list): prods_list = res['data']
+                    elif 'products' in res and isinstance(res['products'], list): prods_list = res['products']
+                    else: prods_list = list(res.values())
+                elif isinstance(res, list): prods_list = res
+                
                 store_dict = {}
                 for p in prods_list:
                     bc = str(p.get('barcode', '')).strip()
                     if bc:
                         store_dict[bc] = p
-                        if bc not in master_catalog:
-                            master_catalog[bc] = p
-                store_catalogs[idx] = store_dict
-                report_data[idx]['status'] = 'Connecté'
-                report_data[idx]['total'] = int(len(prods_list))
-            else:
-                report_data[idx]['status'] = 'Hors ligne'
+                        if bc not in self.master_catalog:
+                            self.master_catalog[bc] = p
+                            
+                self.store_catalogs[current_idx] = store_dict
+                self.sync_report_data[current_idx]['status'] = 'Connecté'
+                self.sync_report_data[current_idx]['total'] = len(prods_list)
+                self._on_phase_2_task_done()
+                
+            def on_fail(req, err, current_idx=idx):
+                self.sync_report_data[current_idx]['status'] = 'Hors ligne'
+                self._on_phase_2_task_done()
+                
+            OriginalUrlRequest(f'{url}/api/products?limit=999999', req_headers=headers, on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=40)
 
-        self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...')
+    def _on_phase_2_task_done(self):
+        self.sync_completed_count += 1
+        if self.sync_completed_count == len(self.sync_selected_indexes):
+            self._start_sync_phase_3()
 
-        def push_batch(idx):
-            if idx not in store_catalogs:
-                return (idx, 0)
+    def _start_sync_phase_3(self):
+        self._update_sync_ui_progress(70, 'Étape 2/2 : Unification', 'Synchronisation des magasins (Envoi)...')
+        self.sync_completed_count = 0
+        import json
+        
+        for idx in self.sync_selected_indexes:
             srv = self.sync_servers_list[idx]
             url = srv.get('_working_url')
-            local_catalog = store_catalogs[idx]
+            local_catalog = self.store_catalogs.get(idx, {})
+            
             items_to_add = []
-
-            for bc, master_p in master_catalog.items():
-                if bc not in local_catalog:
-                    items_to_add.append({
-                        'name': str(master_p.get('name', '')),
-                        'barcode': bc,
-                        'description': str(master_p.get('description', '')),
-                        'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''),
-                        'category': str(master_p.get('category', '')),
-                        'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0),
-                        'price': float(master_p.get('price', 0) or 0),
-                        'price_semi': float(master_p.get('price_semi', 0) or 0),
-                        'price_wholesale': float(master_p.get('price_wholesale', 0) or 0),
-                        'image_path': str(master_p.get('image', '')),
-                        'unit': str(master_p.get('unit', '')),
-                        'tva': float(master_p.get('tva', 0) or 0)
-                    })
-
-            added_count = 0
-            if items_to_add:
-                headers = {'Content-type': 'application/json'}
-                if srv.get('pin'):
-                    headers['X-Server-PIN'] = str(srv.get('pin'))
+            if local_catalog or self.sync_report_data[idx]['status'] == 'Connecté':
+                for bc, master_p in self.master_catalog.items():
+                    if bc not in local_catalog:
+                        items_to_add.append({
+                            'name': str(master_p.get('name', '')),
+                            'barcode': bc,
+                            'description': str(master_p.get('description', '')),
+                            'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''),
+                            'category': str(master_p.get('category', '')),
+                            'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0),
+                            'price': float(master_p.get('price', 0) or 0),
+                            'price_semi': float(master_p.get('price_semi', 0) or 0),
+                            'price_wholesale': float(master_p.get('price_wholesale', 0) or 0),
+                            'image_path': str(master_p.get('image', '')),
+                            'unit': str(master_p.get('unit', '')),
+                            'tva': float(master_p.get('tva', 0) or 0)
+                        })
+                    
+            if not items_to_add:
+                self._on_phase_3_task_done(idx, 0)
+                continue
                 
-                chunk_size = 500
-                for i in range(0, len(items_to_add), chunk_size):
-                    chunk = items_to_add[i:i + chunk_size]
-                    try:
-                        post_res = requests.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=60, verify=False)
-                        if post_res.status_code == 200:
-                            try:
-                                resp_data = post_res.json()
-                                if 'added' in resp_data:
-                                    added_count += int(resp_data['added'])
-                                elif 'count' in resp_data:
-                                    added_count += int(resp_data['count'])
-                                else:
-                                    added_count += len(chunk)
-                            except:
-                                added_count += len(chunk)
-                        else:
-                            print(f"[{srv.get('name')}] Erreur API: HTTP {post_res.status_code}")
-                    except Exception as e:
-                        print(f"[{srv.get('name')}] Erreur réseau (Batch): {e}")
+            headers = {'Content-type': 'application/json'}
+            if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
+            
+            self._push_chunks(idx, url, headers, items_to_add, 0, 0)
+            
+    def _push_chunks(self, idx, url, headers, items, chunk_start, total_added):
+        import json
+        chunk_size = 500
+        chunk = items[chunk_start:chunk_start+chunk_size]
+        
+        if not chunk:
+            self._on_phase_3_task_done(idx, total_added)
+            return
+            
+        def on_success(req, res):
+            added_count = 0
+            try:
+                if isinstance(res, dict): added_count = int(res.get('added', res.get('count', len(chunk))))
+                else: added_count = len(chunk)
+            except:
+                added_count = len(chunk)
+            self._push_chunks(idx, url, headers, items, chunk_start + chunk_size, total_added + added_count)
+            
+        def on_fail(req, err):
+            self._push_chunks(idx, url, headers, items, chunk_start + chunk_size, total_added)
+            
+        OriginalUrlRequest(f'{url}/api/add_products_batch', req_body=json.dumps({'products': chunk}), req_headers=headers, method='POST', on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=45)
 
-            return (idx, added_count)
-
-        push_results = []
-        for idx in selected_indexes:
-            push_results.append(push_batch(idx))
-
-        for idx, added in push_results:
-            safe_added = int(added)
-            report_data[idx]['added'] = safe_added
-            report_data[idx]['total'] += safe_added
-
-        self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
-        time.sleep(0.5)
-        Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
+    def _on_phase_3_task_done(self, idx, added_count):
+        from kivy.clock import Clock
+        self.sync_report_data[idx]['added'] = added_count
+        self.sync_report_data[idx]['total'] += added_count
+        self.sync_completed_count += 1
+        
+        if self.sync_completed_count == len(self.sync_selected_indexes):
+            self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
+            Clock.schedule_once(lambda dt: self.show_sync_report(self.sync_report_data), 0.5)
 
     @mainthread
     def show_sync_report(self, report_data):
