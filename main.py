@@ -702,144 +702,233 @@ class StockApp(MDApp):
         Clock.schedule_once(lambda dt: setattr(self.btn_start_sync, 'disabled', False), 0)
 
     def execute_articles_sync(self, instance):
+        if getattr(self, 'is_syncing_articles', False):
+            return
         has_selection = any(self.sync_selected_stores.values())
         if not has_selection:
             self.notify('Veuillez sélectionner au moins un magasin valide.', 'error')
             return
-        if hasattr(self, 'sync_articles_dialog'):
+        if hasattr(self, 'sync_articles_dialog') and self.sync_articles_dialog:
             self.sync_articles_dialog.dismiss()
         self.is_syncing_articles = True
-        loading_content = MDBoxLayout(orientation='horizontal', spacing=dp(20), padding=dp(20), size_hint_y=None, height=dp(80))
-        loading_content.add_widget(MDSpinner(size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_y': 0.5}))
-        self.lbl_sync_progress = MDLabel(text="Synchronisation en cours...\nVeuillez patienter et ne pas fermer l'application.", theme_text_color='Primary', bold=True)
-        loading_content.add_widget(self.lbl_sync_progress)
-        self.loading_sync_dialog = MDDialog(title='Traitement...', type='custom', content_cls=loading_content, auto_dismiss=False, radius=[15, 15, 15, 15])
+        if hasattr(self, 'loading_sync_dialog') and self.loading_sync_dialog:
+            try:
+                self.loading_sync_dialog.dismiss()
+            except:
+                pass
+        from kivymd.uix.progressbar import MDProgressBar
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.label import MDLabel
+        from kivymd.uix.dialog import MDDialog
+        from kivy.metrics import dp
+        loading_content = MDBoxLayout(orientation='vertical', spacing=dp(15), padding=dp(20), size_hint_y=None, height=dp(140))
+        self.lbl_sync_step = MDLabel(text='Initialisation...', theme_text_color='Primary', bold=True, halign='center')
+        self.sync_progress_bar = MDProgressBar(value=0, max=100, color=(0.1, 0.5, 0.8, 1))
+        self.lbl_sync_detail = MDLabel(text='0%', theme_text_color='Secondary', font_style='Caption', bold=True, halign='center')
+        loading_content.add_widget(self.lbl_sync_step)
+        loading_content.add_widget(self.sync_progress_bar)
+        loading_content.add_widget(self.lbl_sync_detail)
+        self.loading_sync_dialog = MDDialog(title='Synchronisation Rapide', type='custom', content_cls=loading_content, auto_dismiss=False, radius=[15, 15, 15, 15])
         self.loading_sync_dialog.open()
         import threading
         threading.Thread(target=self._sync_articles_worker, daemon=True).start()
 
+    @mainthread
+    def _update_sync_ui_progress(self, percent, step_text, detail_text=''):
+        if hasattr(self, 'sync_progress_bar'):
+            self.sync_progress_bar.value = percent
+            self.lbl_sync_step.text = step_text
+            self.lbl_sync_detail.text = detail_text if detail_text else f'{int(percent)}%'
+
     def _sync_articles_worker(self):
         import requests
-        master_catalog = {}
-        store_catalogs = {}
+        import concurrent.futures
+        from kivy.clock import Clock
+        import time
+        selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
+        total_stores = len(selected_indexes)
+        if total_stores == 0:
+            Clock.schedule_once(lambda dt: self.show_sync_report({}), 0)
+            return
         report_data = {}
-        for i, srv in enumerate(self.sync_servers_list):
-            if not self.sync_selected_stores.get(i, False):
-                continue
-            srv_name = srv.get('name', f'Magasin {i + 1}')
-            report_data[i] = {'name': srv_name, 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
-            working_url = srv.get('_working_url')
-            if not working_url:
-                report_data[i]['status'] = 'Ignoré (Hors ligne)'
-                continue
-            pin = srv.get('pin', '')
-            req_headers = {'Content-type': 'application/json'}
-            if pin:
-                req_headers['X-Server-PIN'] = pin
+        for i in selected_indexes:
+            srv = self.sync_servers_list[i]
+            report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
+        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...'), 0)
+
+        def generate_barcodes(idx):
+            srv = self.sync_servers_list[idx]
+            url = srv.get('_working_url')
+            if not url:
+                return
+            headers = {'Content-type': 'application/json'}
+            if srv.get('pin'):
+                headers['X-Server-PIN'] = srv.get('pin')
             try:
-                res = requests.get(f'{working_url}/api/products?limit=999999', headers=req_headers, timeout=10)
+                requests.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20)
+            except:
+                pass
+        with concurrent.futures.ThreadPoolExecutor(max_workers=total_stores) as executor:
+            executor.map(generate_barcodes, selected_indexes)
+        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...'), 0)
+        store_catalogs = {}
+
+        def fetch_catalog(idx):
+            srv = self.sync_servers_list[idx]
+            url = srv.get('_working_url')
+            if not url:
+                return (idx, None)
+            headers = {'Content-type': 'application/json'}
+            if srv.get('pin'):
+                headers['X-Server-PIN'] = srv.get('pin')
+            try:
+                res = requests.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40)
                 if res.status_code == 200:
-                    prods_data = res.json()
-                    prods_list = []
-                    if isinstance(prods_data, dict):
-                        if 'data' in prods_data and isinstance(prods_data['data'], list):
-                            prods_list = prods_data['data']
-                        elif 'products' in prods_data and isinstance(prods_data['products'], list):
-                            prods_list = prods_data['products']
-                        else:
-                            prods_list = list(prods_data.values())
-                    elif isinstance(prods_data, list):
-                        prods_list = prods_data
-                    store_dict = {}
-                    for p in prods_list:
-                        bc = str(p.get('barcode', '')).strip()
-                        if bc:
-                            store_dict[bc] = p
+                    return (idx, res.json())
+            except:
+                pass
+            return (idx, None)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=total_stores) as executor:
+            results = executor.map(fetch_catalog, selected_indexes)
+        master_catalog = {}
+        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...'), 0)
+        for idx, prods_data in results:
+            if prods_data:
+                prods_list = []
+                if isinstance(prods_data, dict):
+                    if 'data' in prods_data and isinstance(prods_data['data'], list):
+                        prods_list = prods_data['data']
+                    elif 'products' in prods_data and isinstance(prods_data['products'], list):
+                        prods_list = prods_data['products']
+                    else:
+                        prods_list = list(prods_data.values())
+                elif isinstance(prods_data, list):
+                    prods_list = prods_data
+                store_dict = {}
+                for p in prods_list:
+                    bc = str(p.get('barcode', '')).strip()
+                    if bc:
+                        store_dict[bc] = p
+                        if bc not in master_catalog:
                             master_catalog[bc] = p
-                    store_catalogs[i] = store_dict
-                    report_data[i]['status'] = 'Connecté'
-                    report_data[i]['total'] = len(prods_list)
-            except Exception as e:
-                print(f'Error fetching from store {srv_name}: {e}')
-        for i, srv in enumerate(self.sync_servers_list):
-            if not self.sync_selected_stores.get(i, False) or i not in store_catalogs:
-                continue
-            working_url = srv.get('_working_url')
-            pin = srv.get('pin', '')
-            req_headers = {'Content-type': 'application/json'}
-            if pin:
-                req_headers['X-Server-PIN'] = pin
-            local_catalog = store_catalogs.get(i, {})
-            added_count = 0
+                store_catalogs[idx] = store_dict
+                report_data[idx]['status'] = 'Connecté'
+                report_data[idx]['total'] = int(len(prods_list))
+            else:
+                report_data[idx]['status'] = 'Hors ligne'
+        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...'), 0)
+
+        def push_batch(idx):
+            if idx not in store_catalogs:
+                return (idx, 0)
+            srv = self.sync_servers_list[idx]
+            url = srv.get('_working_url')
+            local_catalog = store_catalogs[idx]
+            items_to_add = []
             for bc, master_p in master_catalog.items():
                 if bc not in local_catalog:
-                    payload = {'action': 'add', 'id': None, 'name': master_p.get('name', ''), 'barcode': bc, 'description': master_p.get('description', ''), 'product_ref': master_p.get('product_ref') or master_p.get('ref') or '', 'category': master_p.get('category', ''), 'stock': 0.0, 'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0), 'price': float(master_p.get('price', 0) or 0), 'price_semi': float(master_p.get('price_semi', 0) or 0), 'price_wholesale': float(master_p.get('price_wholesale', 0) or 0), 'image_path': master_p.get('image', ''), 'user_name': self.current_user_name, 'unit': master_p.get('unit', ''), 'tva': float(master_p.get('tva', 0) or 0)}
+                    items_to_add.append({'name': str(master_p.get('name', '')), 'barcode': bc, 'description': str(master_p.get('description', '')), 'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''), 'category': str(master_p.get('category', '')), 'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0), 'price': float(master_p.get('price', 0) or 0), 'price_semi': float(master_p.get('price_semi', 0) or 0), 'price_wholesale': float(master_p.get('price_wholesale', 0) or 0), 'image_path': str(master_p.get('image', '')), 'unit': str(master_p.get('unit', '')), 'tva': float(master_p.get('tva', 0) or 0)})
+            added_count = 0
+            if items_to_add:
+                headers = {'Content-type': 'application/json'}
+                if srv.get('pin'):
+                    headers['X-Server-PIN'] = srv.get('pin')
+                chunk_size = 1000
+                for i in range(0, len(items_to_add), chunk_size):
+                    chunk = items_to_add[i:i + chunk_size]
                     try:
-                        post_res = requests.post(f'{working_url}/api/add_product', json=payload, headers=req_headers, timeout=5)
+                        post_res = requests.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=120)
                         if post_res.status_code == 200:
-                            added_count += 1
+                            try:
+                                resp_data = post_res.json()
+                                if 'added' in resp_data:
+                                    added_count += int(resp_data['added'])
+                                elif 'count' in resp_data:
+                                    added_count += int(resp_data['count'])
+                                else:
+                                    added_count += len(chunk)
+                            except:
+                                added_count += len(chunk)
+                        else:
+                            print(f"[{srv.get('name')}] Erreur API: HTTP {post_res.status_code}")
                     except Exception as e:
-                        print(f"Error adding product to {srv.get('name')}: {e}")
-            if i in report_data:
-                report_data[i]['added'] = added_count
-                report_data[i]['total'] += added_count
-        from kivy.clock import Clock
-        Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0.5)
+                        print(f"[{srv.get('name')}] Erreur réseau (Batch): {e}")
+            return (idx, added_count)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=total_stores) as executor:
+            push_results = executor.map(push_batch, selected_indexes)
+        for idx, added in push_results:
+            safe_added = int(added)
+            report_data[idx]['added'] = safe_added
+            report_data[idx]['total'] += safe_added
+        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.'), 0)
+        time.sleep(0.8)
+        Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
 
     @mainthread
     def show_sync_report(self, report_data):
-        from kivymd.uix.card import MDCard, MDSeparator
+        from kivymd.uix.card import MDCard
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.label import MDLabel
-        from kivymd.uix.button import MDRaisedButton
+        from kivymd.uix.button import MDFillRoundFlatButton
         from kivymd.uix.scrollview import MDScrollView
         from kivymd.uix.label import MDIcon
+        from kivymd.uix.dialog import MDDialog
         from kivy.metrics import dp
         self.is_syncing_articles = False
-        if hasattr(self, 'loading_sync_dialog'):
-            self.loading_sync_dialog.dismiss()
-        content = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing=dp(15), padding=[0, dp(10), 0, 0])
-        scroll = MDScrollView(size_hint_y=None, height=dp(320))
-        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(10), padding=[dp(5), dp(5), dp(5), dp(5)])
-        total_added_global = 0
+        if hasattr(self, 'loading_sync_dialog') and self.loading_sync_dialog:
+            try:
+                self.loading_sync_dialog.dismiss()
+                self.loading_sync_dialog = None
+            except:
+                pass
+        if hasattr(self, 'sync_report_dialog') and self.sync_report_dialog:
+            try:
+                self.sync_report_dialog.dismiss()
+                self.sync_report_dialog = None
+            except:
+                pass
+        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(520), spacing=dp(10), padding=[0, dp(10), 0, 0])
+        total_added_global = sum([int(v.get('added', 0)) for k, v in report_data.items() if report_data])
+        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(90), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if total_added_global > 0 else (0.95, 0.95, 0.95, 1))
+        icon_color = (0, 0.5, 0.9, 1) if total_added_global > 0 else (0.4, 0.4, 0.4, 1)
+        header_card.add_widget(MDIcon(icon='cloud-check' if total_added_global > 0 else 'cloud-sync', theme_text_color='Custom', text_color=icon_color, font_size='45sp', pos_hint={'center_y': 0.5}))
+        header_text = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
+        header_text.add_widget(MDLabel(text='Mise à jour terminée', font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=(0.1, 0.1, 0.1, 1)))
+        header_text.add_widget(MDLabel(text=f'Total global ajouté : +{total_added_global}', font_style='H6', bold=True, theme_text_color='Custom', text_color=icon_color))
+        header_card.add_widget(header_text)
+        content.add_widget(header_card)
+        content.add_widget(MDLabel(text='Détails par magasin :', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20)))
+        scroll = MDScrollView()
+        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[dp(5), dp(5), dp(5), dp(15)])
         if not report_data:
-            empty_lbl = MDLabel(text="Aucun magasin n'a été synchronisé.", halign='center', theme_text_color='Secondary', adaptive_height=True)
-            list_layout.add_widget(empty_lbl)
+            list_layout.add_widget(MDLabel(text='Aucune donnée disponible.', halign='center', theme_text_color='Hint'))
         for i, r_data in report_data.items():
-            s_name = self.fix_text(r_data['name'])
-            s_added = r_data['added']
-            s_total = r_data['total']
-            s_status = r_data['status']
-            total_added_global += s_added
+            s_name = self.fix_text(str(r_data.get('name', 'Magasin')))
+            s_added = int(r_data.get('added', 0))
+            s_total = int(r_data.get('total', 0))
+            s_status = str(r_data.get('status', 'Erreur'))
             is_offline = 'Hors ligne' in s_status or 'Erreur' in s_status
-            card = MDCard(orientation='vertical', padding=dp(12), spacing=dp(8), size_hint_y=None, height=dp(110) if not is_offline else dp(80), radius=[12], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.95, 0.95, 1))
-            header_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(25), spacing=dp(10))
-            header_box.add_widget(MDIcon(icon='store', theme_text_color='Custom', text_color=(0.1, 0.5, 0.8, 1), font_size='22sp'))
-            header_box.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle1', theme_text_color='Primary'))
-            card.add_widget(header_box)
-            card.add_widget(MDSeparator(height=dp(1)))
+            store_card = MDCard(orientation='horizontal', padding=[dp(15), dp(10)], spacing=dp(10), size_hint_y=None, height=dp(70), radius=[10], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
+            store_card.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='28sp', pos_hint={'center_y': 0.5}))
+            info_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(0))
+            info_box.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle2', theme_text_color='Primary'))
             if is_offline:
-                err_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(25), spacing=dp(10))
-                err_box.add_widget(MDIcon(icon='wifi-off', theme_text_color='Error', font_size='18sp'))
-                err_box.add_widget(MDLabel(text=s_status, theme_text_color='Error', font_style='Caption', bold=True))
-                card.add_widget(err_box)
+                info_box.add_widget(MDLabel(text=s_status, font_style='Caption', theme_text_color='Error'))
             else:
-                new_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(20), spacing=dp(10))
-                new_box.add_widget(MDIcon(icon='plus-circle', theme_text_color='Custom', text_color=(0, 0.7, 0, 1), font_size='18sp'))
-                new_box.add_widget(MDLabel(text=f'Nouveaux:  +{s_added}', theme_text_color='Custom', text_color=(0, 0.7, 0, 1), font_style='Body2', bold=True))
-                card.add_widget(new_box)
-                tot_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(20), spacing=dp(10))
-                tot_box.add_widget(MDIcon(icon='format-list-bulleted', theme_text_color='Custom', text_color=(0.3, 0.3, 0.3, 1), font_size='18sp'))
-                tot_box.add_widget(MDLabel(text=f'Total actuel:  {s_total}', theme_text_color='Secondary', font_style='Body2', bold=True))
-                card.add_widget(tot_box)
-            list_layout.add_widget(card)
+                info_box.add_widget(MDLabel(text=f'Total en base: {s_total}', font_style='Caption', theme_text_color='Secondary'))
+            store_card.add_widget(info_box)
+            if not is_offline:
+                badge_color = (0, 0.7, 0.2, 1) if s_added > 0 else (0.6, 0.6, 0.6, 1)
+                badge_bg = (0.9, 1, 0.9, 1) if s_added > 0 else (0.95, 0.95, 0.95, 1)
+                badge = MDCard(size_hint=(None, None), size=(dp(60), dp(30)), radius=[15], md_bg_color=badge_bg, elevation=0, pos_hint={'center_y': 0.5})
+                badge.add_widget(MDLabel(text=f'+{s_added}', halign='center', bold=True, theme_text_color='Custom', text_color=badge_color, font_size='14sp'))
+                store_card.add_widget(badge)
+            list_layout.add_widget(store_card)
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-        summary_card = MDCard(md_bg_color=(0.9, 0.95, 1, 1), radius=[10], padding=dp(10), size_hint_y=None, height=dp(60), elevation=0)
-        summary_lbl = MDLabel(text=f'Mise à jour terminée.\n[b]Total global injecté: +{total_added_global}[/b]', halign='center', theme_text_color='Custom', text_color=(0, 0.3, 0.7, 1), markup=True)
-        summary_card.add_widget(summary_lbl)
-        content.add_widget(summary_card)
-        self.sync_report_dialog = MDDialog(title='Rapport de Synchronisation', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDRaisedButton(text='FERMER', md_bg_color=(0, 0.6, 0.2, 1), font_size='16sp', on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])])
+        btn_close = MDFillRoundFlatButton(text='TERMINER', font_size='16sp', size_hint_x=1, height=dp(50), md_bg_color=(0.1, 0.1, 0.1, 1), on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
+        content.add_widget(btn_close)
+        self.sync_report_dialog = MDDialog(title='', type='custom', content_cls=content, radius=[20, 20, 20, 20], auto_dismiss=False)
         self.sync_report_dialog.open()
 
     def submit_remote_transfer(self):
@@ -3898,13 +3987,13 @@ class StockApp(MDApp):
         icon_box.add_widget(MDIcon(icon='store', font_size='60sp', pos_hint={'center_x': 0.5, 'center_y': 0.5}, theme_text_color='Primary'))
         card_login.add_widget(icon_box)
         card_login.add_widget(MDLabel(text='MagPro Vendeur', halign='center', font_style='H5', bold=True))
-        self.btn_current_restaurant = MDCard(orientation='horizontal', size_hint=(1, None), height=dp(45), radius=[15, 15, 15, 15], md_bg_color=(0.1, 0.5, 0.8, 1), padding=[dp(15), 0, dp(15), 0], spacing=dp(10), ripple_behavior=True, on_release=self.open_restaurant_selector)
-        self.btn_current_restaurant.add_widget(MDIcon(icon='store', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='20sp', pos_hint={'center_y': 0.5}))
-        self.lbl_current_restaurant = MDLabel(text='Chargement...', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='center', font_name='ArabicFont', font_size='16sp')
-        self.btn_current_restaurant.add_widget(self.lbl_current_restaurant)
-        self.icon_chevron_restaurant = MDIcon(icon='chevron-down', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='24sp', pos_hint={'center_y': 0.5})
-        self.btn_current_restaurant.add_widget(self.icon_chevron_restaurant)
-        card_login.add_widget(self.btn_current_restaurant)
+        self.btn_current_magasin = MDCard(orientation='horizontal', size_hint=(1, None), height=dp(45), radius=[15, 15, 15, 15], md_bg_color=(0.1, 0.5, 0.8, 1), padding=[dp(15), 0, dp(15), 0], spacing=dp(10), ripple_behavior=True, on_release=self.open_magasin_selector)
+        self.btn_current_magasin.add_widget(MDIcon(icon='store', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='20sp', pos_hint={'center_y': 0.5}))
+        self.lbl_current_magasin = MDLabel(text='Chargement...', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='center', font_name='ArabicFont', font_size='16sp')
+        self.btn_current_magasin.add_widget(self.lbl_current_magasin)
+        self.icon_chevron_magasin = MDIcon(icon='chevron-down', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='24sp', pos_hint={'center_y': 0.5})
+        self.btn_current_magasin.add_widget(self.icon_chevron_magasin)
+        card_login.add_widget(self.btn_current_magasin)
         saved_user = 'ADMIN'
         if self.store.exists('credentials'):
             saved_user = self.store.get('credentials').get('username', 'ADMIN')
@@ -3957,52 +4046,138 @@ class StockApp(MDApp):
         store_name = self.fix_text(active_srv.get('name', 'Magasin Inconnu'))
         if hasattr(self, 'dash_toolbar') and self.dash_toolbar:
             self.dash_toolbar.title = store_name
-        if hasattr(self, 'lbl_current_restaurant') and self.lbl_current_restaurant:
-            self.lbl_current_restaurant.text = store_name
-        if hasattr(self, 'icon_chevron_restaurant') and self.icon_chevron_restaurant:
+        if hasattr(self, 'lbl_current_magasin') and self.lbl_current_magasin:
+            self.lbl_current_magasin.text = store_name
+        if hasattr(self, 'icon_chevron_magasin') and self.icon_chevron_magasin:
             if len(servers) <= 1:
-                self.icon_chevron_restaurant.opacity = 0
+                self.icon_chevron_magasin.opacity = 0
             else:
-                self.icon_chevron_restaurant.opacity = 1
-        if hasattr(self, 'btn_current_restaurant') and self.btn_current_restaurant:
+                self.icon_chevron_magasin.opacity = 1
+        if hasattr(self, 'btn_current_magasin') and self.btn_current_magasin:
             from kivy.metrics import dp
             if is_seller:
-                self.btn_current_restaurant.opacity = 0
-                self.btn_current_restaurant.height = 0
-                self.btn_current_restaurant.disabled = True
+                self.btn_current_magasin.opacity = 0
+                self.btn_current_magasin.height = 0
+                self.btn_current_magasin.disabled = True
             else:
-                self.btn_current_restaurant.opacity = 1
-                self.btn_current_restaurant.height = dp(45)
-                self.btn_current_restaurant.disabled = False
+                self.btn_current_magasin.opacity = 1
+                self.btn_current_magasin.height = dp(45)
+                self.btn_current_magasin.disabled = False
         self._ping_local()
 
-    def open_restaurant_selector(self, instance=None):
+    def open_magasin_selector(self, instance=None):
         data = self.store.get('servers_config')
         servers = data.get('list', [])
+        active_index = data.get('active_index', 0)
         if len(servers) <= 1:
             return
-        content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(5))
-        scroll = MDScrollView(size_hint_y=None, height=dp(250))
-        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True)
-        for i, srv in enumerate(servers):
-            is_active = i == data.get('active_index', 0)
-            card = MDCard(orientation='vertical', size_hint_y=None, height=dp(55), elevation=0, md_bg_color=(0, 0, 0, 0), ripple_behavior=True, on_release=lambda x, idx=i: self.set_active_restaurant(idx))
-            lbl = MDLabel(text=self.fix_text(srv.get('name', 'Inconnu')), halign='center', valign='center', font_name='ArabicFont', font_size='20sp', bold=is_active, theme_text_color='Custom', text_color=(0.1, 0.4, 0.7, 1) if is_active else (0.3, 0.3, 0.3, 1))
-            card.add_widget(lbl)
+        content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(10))
+        scroll = MDScrollView(size_hint_y=None, height=dp(300))
+        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
+        self.store_status_icons = {}
+        self.store_status_labels = {}
+        self.store_online_flags = {}
+        indexed_servers = list(enumerate(servers))
+        indexed_servers.sort(key=lambda item: str(item[1].get('name', '')).lower())
+        for original_idx, srv in indexed_servers:
+            is_active = original_idx == active_index
+            display_name = self.fix_text(srv.get('name', 'Inconnu'))
+            bg_color = (0.9, 0.95, 1, 1) if is_active else (0.98, 0.98, 0.98, 1)
+            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(65), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True, on_release=lambda x, idx=original_idx: self._on_store_selected(idx))
+            icon_status = MDIcon(icon='wifi-sync', theme_text_color='Hint', font_size='28sp', pos_hint={'center_y': 0.5})
+            self.store_status_icons[original_idx] = icon_status
+            self.store_online_flags[original_idx] = False
+            card.add_widget(icon_status)
+            txt_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
+            lbl_name = MDLabel(text=display_name, bold=True, font_style='Subtitle1', theme_text_color='Primary')
+            lbl_status = MDLabel(text='Vérification...', font_style='Caption', theme_text_color='Hint')
+            self.store_status_labels[original_idx] = lbl_status
+            txt_box.add_widget(lbl_name)
+            txt_box.add_widget(lbl_status)
+            card.add_widget(txt_box)
+            if is_active:
+                card.add_widget(MDIcon(icon='check-circle', theme_text_color='Custom', text_color=(0, 0.5, 0.8, 1), font_size='24sp', pos_hint={'center_y': 0.5}))
             list_layout.add_widget(card)
-            from kivymd.uix.card import MDSeparator
-            list_layout.add_widget(MDSeparator(height=dp(1)))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-        self.dialog_select_resto = MDDialog(title='Choisir un Magasin', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.dialog_select_resto.dismiss())])
-        self.dialog_select_resto.open()
+        self.dialog_select_magasin = MDDialog(title='Choisir un Magasin', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.dialog_select_magasin.dismiss())])
+        self.dialog_select_magasin.open()
+        import threading
+        threading.Thread(target=self._check_stores_connection_bg, args=(servers,), daemon=True).start()
 
-    def set_active_restaurant(self, index):
+    def _check_stores_connection_bg(self, servers):
+        import requests
+        import re
+        for i, srv in enumerate(servers):
+            local_ip = srv.get('local_ip', '').strip()
+            ext_ip = srv.get('ext_ip', '').strip()
+            urls_to_test = []
+            for ip in [ext_ip, local_ip]:
+                if not ip:
+                    continue
+                if 'http' in ip:
+                    urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
+                elif re.search('[a-zA-Z]', ip):
+                    urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
+                    urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+                elif ':' in ip:
+                    urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+                else:
+                    urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
+            is_online = False
+            for test_url in urls_to_test:
+                try:
+                    res = requests.get(test_url, timeout=2.5)
+                    if res.status_code == 200:
+                        is_online = True
+                        break
+                except:
+                    continue
+            from kivy.clock import Clock
+            Clock.schedule_once(lambda dt, idx=i, online=is_online: self._update_store_status_ui(idx, online), 0)
+
+    @mainthread
+    def _update_store_status_ui(self, index, is_online):
+        if not hasattr(self, 'dialog_select_magasin') or not self.dialog_select_magasin:
+            return
+        self.store_online_flags[index] = is_online
+        icon_widget = self.store_status_icons.get(index)
+        lbl_widget = self.store_status_labels.get(index)
+        if is_online:
+            icon_widget.icon = 'wifi'
+            icon_widget.text_color = (0, 0.7, 0, 1)
+            icon_widget.theme_text_color = 'Custom'
+            lbl_widget.text = 'En ligne'
+            lbl_widget.theme_text_color = 'Custom'
+            lbl_widget.text_color = (0, 0.7, 0, 1)
+        else:
+            icon_widget.icon = 'wifi-off'
+            icon_widget.text_color = (0.8, 0, 0, 1)
+            icon_widget.theme_text_color = 'Custom'
+            lbl_widget.text = 'Hors ligne'
+            lbl_widget.theme_text_color = 'Error'
+
+    def _on_store_selected(self, index):
+        data = self.store.get('servers_config')
+        active_index = data.get('active_index', 0)
+        if index == active_index:
+            self.dialog_select_magasin.dismiss()
+            return
+        is_online = self.store_online_flags.get(index, False)
+        self.set_active_magasin(index)
+        if hasattr(self, 'dialog_select_magasin') and self.dialog_select_magasin:
+            self.dialog_select_magasin.dismiss()
+        if is_online:
+            self.notify('Magasin sélectionné avec succès', 'success')
+        else:
+            self.notify('Attention : Vous êtes entré en mode HORS LIGNE.', 'warning')
+
+    def set_active_magasin(self, index):
         data = self.store.get('servers_config')
         self.store.put('servers_config', list=data.get('list', []), active_index=index)
         self.apply_active_server()
-        if hasattr(self, 'dialog_select_resto') and self.dialog_select_resto:
-            self.dialog_select_resto.dismiss()
+        if hasattr(self, 'dialog_select_magasin') and self.dialog_select_magasin:
+            self.dialog_select_magasin.dismiss()
         self.notify('Magasin sélectionné avec succès', 'success')
 
     def open_delivery_map(self):
