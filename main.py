@@ -703,11 +703,11 @@ class StockApp(MDApp):
                 if res.status_code == 200:
                     return test_url
                 else:
-                    err = f"مرفوض من Cloudflare (Code: {res.status_code})"
+                    err = f"Rejeté par Cloudflare (Code: {res.status_code})"
                     Clock.schedule_once(lambda dt, msg=err: self.notify(msg, "error"), 0)
             except Exception as e:
                 err_msg = str(e)[:45] 
-                Clock.schedule_once(lambda dt, msg=err_msg: self.notify(f"خطأ اتصال: {msg}", "error"), 0)
+                Clock.schedule_once(lambda dt, msg=err_msg: self.notify(f"Erreur de connexion : {msg}", "error"), 0)
                 continue
         return None
 
@@ -1674,7 +1674,7 @@ class StockApp(MDApp):
         if hasattr(self, 'dialog') and self.dialog:
             self.dialog.dismiss()
             self.open_ip_settings()
-        self.notify(f'تم حفظ الطابعة: {name}', 'success')
+        self.notify(f'Imprimante enregistrée : {name}', 'success')
 
     def clear_printer_selection(self, instance):
         self.store.put('printer_config', name='', mac='', auto=False)
@@ -1685,7 +1685,7 @@ class StockApp(MDApp):
         if hasattr(self, 'dialog') and self.dialog:
             self.dialog.dismiss()
             self.open_ip_settings()
-        self.notify('تم حذف الطابعة', 'info')
+        self.notify('Imprimante supprimée', 'info')
 
     def print_ticket_bluetooth(self, transaction_data):
         if platform != 'android':
@@ -6061,7 +6061,7 @@ class StockApp(MDApp):
 
     def toggle_location(self, x=None):
         if self.current_mode in ['stock_in', 'stock_out']:
-            self.notify('الموقع ثابت على المتجر الرئيسي لهذه العملية', 'info')
+            self.notify("L'emplacement est fixé sur le magasin principal pour cette opération", 'info')
             return
         mode = getattr(self, 'user_sales_mode', 'store')
         if mode == 'truck':
@@ -7376,7 +7376,7 @@ class StockApp(MDApp):
                 list_layout.add_widget(item_box)
                 list_layout.add_widget(MDBoxLayout(size_hint_y=None, height=dp(1), md_bg_color=(0.9, 0.9, 0.9, 1)))
         else:
-            list_layout.add_widget(OneLineListItem(text='Aucun article أو opération financière'))
+            list_layout.add_widget(OneLineListItem(text='Aucun article ou opération financière'))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         actions_layout = MDBoxLayout(orientation='vertical', spacing='10dp', adaptive_height=True, padding=[0, '15dp', 0, 0])
