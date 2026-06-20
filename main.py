@@ -692,7 +692,7 @@ class StockApp(MDApp):
                 urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}")
         for test_url in urls_to_test:
             try:
-                res = requests.get(f'{test_url}/api/ping', timeout=5, verify=False)
+                res = requests.get(f'{test_url}/api/ping', timeout=8, verify=False)
                 if res.status_code == 200:
                     return test_url
             except Exception as e:
@@ -751,7 +751,6 @@ class StockApp(MDApp):
         import requests
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        import concurrent.futures
         from kivy.clock import Clock
         import time
 
@@ -759,7 +758,7 @@ class StockApp(MDApp):
         total_stores = len(selected_indexes)
         
         if total_stores == 0:
-            self.show_sync_report({})
+            Clock.schedule_once(lambda dt: self.show_sync_report({}), 0)
             return
 
         report_data = {}
@@ -779,11 +778,11 @@ class StockApp(MDApp):
                 headers['X-Server-PIN'] = str(srv.get('pin'))
             try:
                 requests.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20, verify=False)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Android Sync Gen Barcode Error: {e}")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 5)) as executor:
-            executor.map(generate_barcodes, selected_indexes)
+        for idx in selected_indexes:
+            generate_barcodes(idx)
 
         self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...')
         store_catalogs = {}
@@ -800,12 +799,13 @@ class StockApp(MDApp):
                 res = requests.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40, verify=False)
                 if res.status_code == 200:
                     return (idx, res.json())
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Android Sync Fetch Error: {e}")
             return (idx, None)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 5)) as executor:
-            results = executor.map(fetch_catalog, selected_indexes)
+        results = []
+        for idx in selected_indexes:
+            results.append(fetch_catalog(idx))
 
         master_catalog = {}
         self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...')
@@ -892,8 +892,9 @@ class StockApp(MDApp):
 
             return (idx, added_count)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 5)) as executor:
-            push_results = executor.map(push_batch, selected_indexes)
+        push_results = []
+        for idx in selected_indexes:
+            push_results.append(push_batch(idx))
 
         for idx, added in push_results:
             safe_added = int(added)
@@ -902,7 +903,7 @@ class StockApp(MDApp):
 
         self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
         time.sleep(0.5)
-        self.show_sync_report(report_data)
+        Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
 
     @mainthread
     def show_sync_report(self, report_data):
