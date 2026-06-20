@@ -674,37 +674,40 @@ class StockApp(MDApp):
     def _get_working_url_helper(self, srv):
         import requests
         import urllib3
+        import certifi
+        import os
         import re
+        from kivy.clock import Clock
+        
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
         
         local_ip = str(srv.get('local_ip', '')).strip()
         ext_ip = str(srv.get('ext_ip', '')).strip()
         urls_to_test = []
         
-        for ip in [ext_ip, local_ip]:
-            if not ip:
-                continue
-            if 'http' in ip:
-                urls_to_test.append(ip.rstrip('/'))
-            elif re.search('[a-zA-Z]', ip):
-                urls_to_test.append(f"https://{ip.rstrip('/')}")
-            elif ':' in ip:
-                urls_to_test.append(f"http://{ip.rstrip('/')}")
-            else:
-                urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}")
+        if ext_ip:
+            urls_to_test.append(f"https://{ext_ip.replace('https://', '').replace('http://', '').strip('/')}")
+        if local_ip:
+            urls_to_test.append(f"http://{local_ip.replace('http://', '').strip('/')}:{DEFAULT_PORT}")
                 
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': '*/*',
-            'Connection': 'keep-alive'
+            'Accept': 'application/json'
         }
                 
         for test_url in urls_to_test:
             try:
-                res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=8, verify=False)
+                res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=10, verify=False)
                 if res.status_code == 200:
                     return test_url
-            except:
+                else:
+                    err = f"مرفوض من Cloudflare (Code: {res.status_code})"
+                    Clock.schedule_once(lambda dt, msg=err: self.notify(msg, "error"), 0)
+            except Exception as e:
+                err_msg = str(e)[:45] 
+                Clock.schedule_once(lambda dt, msg=err_msg: self.notify(f"خطأ اتصال: {msg}", "error"), 0)
                 continue
         return None
 
