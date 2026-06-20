@@ -623,19 +623,24 @@ class StockApp(MDApp):
         content.add_widget(info_label)
         scroll = MDScrollView(size_hint_y=None, height=dp(250))
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
-        for i, srv in enumerate(self.sync_servers_list):
-            srv_name = self.fix_text(srv.get('name', f'Magasin {i + 1}'))
+        
+        indexed_servers = list(enumerate(self.sync_servers_list))
+        indexed_servers.sort(key=lambda item: str(item[1].get('name', '')).lower())
+        
+        for original_idx, srv in indexed_servers:
+            srv_name = self.fix_text(srv.get('name', f'Magasin {original_idx + 1}'))
             card = MDCard(orientation='horizontal', padding=[dp(10), dp(5), dp(15), dp(5)], spacing=dp(10), size_hint_y=None, height=dp(55), radius=[10], elevation=1, md_bg_color=(0.98, 0.98, 0.98, 1))
             chk = MDCheckbox(active=True, size_hint=(None, None), size=(dp(48), dp(48)), pos_hint={'center_y': 0.5})
-            chk.bind(active=lambda inst, val, idx=i: self._toggle_sync_store(idx, val))
-            self.sync_checkboxes[i] = chk
+            chk.bind(active=lambda inst, val, idx=original_idx: self._toggle_sync_store(idx, val))
+            self.sync_checkboxes[original_idx] = chk
             card.add_widget(chk)
             lbl_name = MDLabel(text=srv_name, bold=True, font_style='Subtitle2', theme_text_color='Primary', pos_hint={'center_y': 0.5})
             card.add_widget(lbl_name)
             icon_status = MDIcon(icon='sync', theme_text_color='Hint', font_size='26sp', pos_hint={'center_y': 0.5})
-            self.sync_status_icons[i] = icon_status
+            self.sync_status_icons[original_idx] = icon_status
             card.add_widget(icon_status)
             list_layout.add_widget(card)
+            
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         self.btn_start_sync = MDRaisedButton(text='DÉMARRER', md_bg_color=(0.1, 0.5, 0.8, 1), disabled=True, on_release=self.execute_articles_sync)
@@ -668,7 +673,9 @@ class StockApp(MDApp):
 
     def _get_working_url_helper(self, srv):
         import requests
+        import urllib3
         import re
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         local_ip = srv.get('local_ip', '').strip()
         ext_ip = srv.get('ext_ip', '').strip()
         urls_to_test = []
@@ -685,10 +692,10 @@ class StockApp(MDApp):
                 urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}")
         for test_url in urls_to_test:
             try:
-                res = requests.get(f'{test_url}/api/ping', timeout=3)
+                res = requests.get(f'{test_url}/api/ping', timeout=5, verify=False)
                 if res.status_code == 200:
                     return test_url
-            except:
+            except Exception as e:
                 continue
         return None
 
@@ -742,19 +749,25 @@ class StockApp(MDApp):
 
     def _sync_articles_worker(self):
         import requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         import concurrent.futures
         from kivy.clock import Clock
         import time
+
         selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
         total_stores = len(selected_indexes)
+        
         if total_stores == 0:
-            Clock.schedule_once(lambda dt: self.show_sync_report({}), 0)
+            self.show_sync_report({})
             return
+
         report_data = {}
         for i in selected_indexes:
             srv = self.sync_servers_list[i]
             report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
-        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...'), 0)
+
+        self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...')
 
         def generate_barcodes(idx):
             srv = self.sync_servers_list[idx]
@@ -763,14 +776,16 @@ class StockApp(MDApp):
                 return
             headers = {'Content-type': 'application/json'}
             if srv.get('pin'):
-                headers['X-Server-PIN'] = srv.get('pin')
+                headers['X-Server-PIN'] = str(srv.get('pin'))
             try:
-                requests.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20)
-            except:
+                requests.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20, verify=False)
+            except Exception:
                 pass
-        with concurrent.futures.ThreadPoolExecutor(max_workers=total_stores) as executor:
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 5)) as executor:
             executor.map(generate_barcodes, selected_indexes)
-        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...'), 0)
+
+        self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...')
         store_catalogs = {}
 
         def fetch_catalog(idx):
@@ -780,18 +795,21 @@ class StockApp(MDApp):
                 return (idx, None)
             headers = {'Content-type': 'application/json'}
             if srv.get('pin'):
-                headers['X-Server-PIN'] = srv.get('pin')
+                headers['X-Server-PIN'] = str(srv.get('pin'))
             try:
-                res = requests.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40)
+                res = requests.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40, verify=False)
                 if res.status_code == 200:
                     return (idx, res.json())
-            except:
+            except Exception:
                 pass
             return (idx, None)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=total_stores) as executor:
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 5)) as executor:
             results = executor.map(fetch_catalog, selected_indexes)
+
         master_catalog = {}
-        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...'), 0)
+        self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...')
+
         for idx, prods_data in results:
             if prods_data:
                 prods_list = []
@@ -804,6 +822,7 @@ class StockApp(MDApp):
                         prods_list = list(prods_data.values())
                 elif isinstance(prods_data, list):
                     prods_list = prods_data
+
                 store_dict = {}
                 for p in prods_list:
                     bc = str(p.get('barcode', '')).strip()
@@ -816,7 +835,8 @@ class StockApp(MDApp):
                 report_data[idx]['total'] = int(len(prods_list))
             else:
                 report_data[idx]['status'] = 'Hors ligne'
-        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...'), 0)
+
+        self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...')
 
         def push_batch(idx):
             if idx not in store_catalogs:
@@ -825,19 +845,35 @@ class StockApp(MDApp):
             url = srv.get('_working_url')
             local_catalog = store_catalogs[idx]
             items_to_add = []
+
             for bc, master_p in master_catalog.items():
                 if bc not in local_catalog:
-                    items_to_add.append({'name': str(master_p.get('name', '')), 'barcode': bc, 'description': str(master_p.get('description', '')), 'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''), 'category': str(master_p.get('category', '')), 'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0), 'price': float(master_p.get('price', 0) or 0), 'price_semi': float(master_p.get('price_semi', 0) or 0), 'price_wholesale': float(master_p.get('price_wholesale', 0) or 0), 'image_path': str(master_p.get('image', '')), 'unit': str(master_p.get('unit', '')), 'tva': float(master_p.get('tva', 0) or 0)})
+                    items_to_add.append({
+                        'name': str(master_p.get('name', '')),
+                        'barcode': bc,
+                        'description': str(master_p.get('description', '')),
+                        'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''),
+                        'category': str(master_p.get('category', '')),
+                        'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0),
+                        'price': float(master_p.get('price', 0) or 0),
+                        'price_semi': float(master_p.get('price_semi', 0) or 0),
+                        'price_wholesale': float(master_p.get('price_wholesale', 0) or 0),
+                        'image_path': str(master_p.get('image', '')),
+                        'unit': str(master_p.get('unit', '')),
+                        'tva': float(master_p.get('tva', 0) or 0)
+                    })
+
             added_count = 0
             if items_to_add:
                 headers = {'Content-type': 'application/json'}
                 if srv.get('pin'):
-                    headers['X-Server-PIN'] = srv.get('pin')
-                chunk_size = 1000
+                    headers['X-Server-PIN'] = str(srv.get('pin'))
+                
+                chunk_size = 500
                 for i in range(0, len(items_to_add), chunk_size):
                     chunk = items_to_add[i:i + chunk_size]
                     try:
-                        post_res = requests.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=120)
+                        post_res = requests.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=60, verify=False)
                         if post_res.status_code == 200:
                             try:
                                 resp_data = post_res.json()
@@ -853,16 +889,20 @@ class StockApp(MDApp):
                             print(f"[{srv.get('name')}] Erreur API: HTTP {post_res.status_code}")
                     except Exception as e:
                         print(f"[{srv.get('name')}] Erreur réseau (Batch): {e}")
+
             return (idx, added_count)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=total_stores) as executor:
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 5)) as executor:
             push_results = executor.map(push_batch, selected_indexes)
+
         for idx, added in push_results:
             safe_added = int(added)
             report_data[idx]['added'] = safe_added
             report_data[idx]['total'] += safe_added
-        Clock.schedule_once(lambda dt: self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.'), 0)
-        time.sleep(0.8)
-        Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
+
+        self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
+        time.sleep(0.5)
+        self.show_sync_report(report_data)
 
     @mainthread
     def show_sync_report(self, report_data):
@@ -902,7 +942,10 @@ class StockApp(MDApp):
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[dp(5), dp(5), dp(5), dp(15)])
         if not report_data:
             list_layout.add_widget(MDLabel(text='Aucune donnée disponible.', halign='center', theme_text_color='Hint'))
-        for i, r_data in report_data.items():
+            
+        sorted_report = sorted(report_data.items(), key=lambda x: str(x[1].get('name', '')).lower())
+        
+        for i, r_data in sorted_report:
             s_name = self.fix_text(str(r_data.get('name', 'Magasin')))
             s_added = int(r_data.get('added', 0))
             s_total = int(r_data.get('total', 0))
@@ -924,6 +967,7 @@ class StockApp(MDApp):
                 badge.add_widget(MDLabel(text=f'+{s_added}', halign='center', bold=True, theme_text_color='Custom', text_color=badge_color, font_size='14sp'))
                 store_card.add_widget(badge)
             list_layout.add_widget(store_card)
+            
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         btn_close = MDFillRoundFlatButton(text='TERMINER', font_size='16sp', size_hint_x=1, height=dp(50), md_bg_color=(0.1, 0.1, 0.1, 1), on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
