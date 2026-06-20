@@ -676,6 +676,7 @@ class StockApp(MDApp):
         import urllib3
         import re
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
         local_ip = str(srv.get('local_ip', '')).strip()
         ext_ip = str(srv.get('ext_ip', '')).strip()
         urls_to_test = []
@@ -692,13 +693,18 @@ class StockApp(MDApp):
             else:
                 urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}")
                 
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Connection': 'keep-alive'
+        }
+                
         for test_url in urls_to_test:
             try:
-                res = requests.get(f'{test_url}/api/ping', timeout=5, verify=False)
+                res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=8, verify=False)
                 if res.status_code == 200:
                     return test_url
-            except Exception as e:
-                print(f"[Network] Cannot reach {test_url}: {e}")
+            except:
                 continue
         return None
 
@@ -754,14 +760,22 @@ class StockApp(MDApp):
         import requests
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        import concurrent.futures
+        from kivy.clock import Clock
         import time
+
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Connection': 'keep-alive'
+        })
 
         try:
             selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
             total_stores = len(selected_indexes)
             
             if total_stores == 0:
-                from kivy.clock import Clock
                 Clock.schedule_once(lambda dt: self.show_sync_report({}), 0)
                 return
 
@@ -772,41 +786,37 @@ class StockApp(MDApp):
 
             self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...')
 
-            for idx in selected_indexes:
+            def generate_barcodes(idx):
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
-                if not url:
-                    continue
-                headers = {'Content-type': 'application/json'}
-                if srv.get('pin'):
-                    headers['X-Server-PIN'] = str(srv.get('pin'))
+                if not url: return
+                headers = {}
+                if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
                 try:
-                    requests.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20, verify=False)
-                except Exception as e:
-                    print(f"[Sync] Barcode Gen Error ({srv.get('name')}): {e}")
+                    session.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20, verify=False)
+                except: pass
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
+                executor.map(generate_barcodes, selected_indexes)
 
             self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...')
             store_catalogs = {}
 
-            results = []
-            for idx in selected_indexes:
+            def fetch_catalog(idx):
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
-                if not url:
-                    results.append((idx, None))
-                    continue
-                headers = {'Content-type': 'application/json'}
-                if srv.get('pin'):
-                    headers['X-Server-PIN'] = str(srv.get('pin'))
+                if not url: return (idx, None)
+                headers = {}
+                if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
                 try:
-                    res = requests.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40, verify=False)
-                    if res.status_code == 200:
-                        results.append((idx, res.json()))
-                    else:
-                        results.append((idx, None))
-                except Exception as e:
-                    print(f"[Sync] Fetch Error ({srv.get('name')}): {e}")
-                    results.append((idx, None))
+                    res = session.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40, verify=False)
+                    if res.status_code == 200: 
+                        return (idx, res.json())
+                except: pass
+                return (idx, None)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
+                results = executor.map(fetch_catalog, selected_indexes)
 
             master_catalog = {}
             self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...')
@@ -839,12 +849,8 @@ class StockApp(MDApp):
 
             self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...')
 
-            push_results = []
-            for idx in selected_indexes:
-                if idx not in store_catalogs:
-                    push_results.append((idx, 0))
-                    continue
-                    
+            def push_batch(idx):
+                if idx not in store_catalogs: return (idx, 0)
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
                 local_catalog = store_catalogs[idx]
@@ -869,32 +875,28 @@ class StockApp(MDApp):
 
                 added_count = 0
                 if items_to_add:
-                    headers = {'Content-type': 'application/json'}
-                    if srv.get('pin'):
-                        headers['X-Server-PIN'] = str(srv.get('pin'))
+                    headers = {}
+                    if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
                     
-                    chunk_size = 500
-                    for c_i in range(0, len(items_to_add), chunk_size):
-                        chunk = items_to_add[c_i:c_i + chunk_size]
+                    chunk_size = 300  
+                    for i in range(0, len(items_to_add), chunk_size):
+                        chunk = items_to_add[i:i + chunk_size]
                         try:
-                            post_res = requests.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=60, verify=False)
+                            post_res = session.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=60, verify=False)
                             if post_res.status_code == 200:
                                 try:
                                     resp_data = post_res.json()
-                                    if 'added' in resp_data:
-                                        added_count += int(resp_data['added'])
-                                    elif 'count' in resp_data:
-                                        added_count += int(resp_data['count'])
-                                    else:
-                                        added_count += len(chunk)
+                                    if 'added' in resp_data: added_count += int(resp_data['added'])
+                                    elif 'count' in resp_data: added_count += int(resp_data['count'])
+                                    else: added_count += len(chunk)
                                 except:
                                     added_count += len(chunk)
-                            else:
-                                print(f"[{srv.get('name')}] Erreur API: HTTP {post_res.status_code}")
-                        except Exception as e:
-                            print(f"[{srv.get('name')}] Erreur réseau (Batch): {e}")
+                        except: pass
 
-                push_results.append((idx, added_count))
+                return (idx, added_count)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
+                push_results = executor.map(push_batch, selected_indexes)
 
             for idx, added in push_results:
                 safe_added = int(added)
@@ -903,14 +905,11 @@ class StockApp(MDApp):
 
             self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
             time.sleep(0.5)
-            
-            from kivy.clock import Clock
             Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
 
         except Exception as global_e:
             print(f"[Sync FATAL ERROR] {global_e}")
-            self._update_sync_ui_progress(100, 'Erreur de Mots', f'Erreur: {str(global_e)[:30]}')
-            from kivy.clock import Clock
+            self._update_sync_ui_progress(100, 'Erreur', f'Erreur: {str(global_e)[:30]}')
             Clock.schedule_once(lambda dt: self.show_sync_report({}), 1)
 
     @mainthread
