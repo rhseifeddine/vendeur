@@ -2911,6 +2911,18 @@ class StockApp(MDApp):
             release_lock_and_finish()
 
     def validate_cart_action(self, instance):
+        if getattr(self, 'is_transaction_in_progress', False):
+            return
+            
+        current_time = time.time()
+        if current_time - getattr(self, '_last_cart_validate_time', 0) < 1.5:
+            return
+        self._last_cart_validate_time = current_time
+        
+        if instance:
+            instance.disabled = True
+            Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 2.0)
+
         if self.current_mode == 'request_stock':
             self.submit_stock_request()
         elif self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 1:
@@ -3827,15 +3839,22 @@ class StockApp(MDApp):
 
     def try_sync_offline_data(self):
         Clock.schedule_once(self._process_remote_sync_queue, 0)
-        if self.sync_paused:
+        if getattr(self, 'sync_paused', False):
             return
-        if not self.is_server_reachable:
+        if not getattr(self, 'is_server_reachable', False):
             return
+        
+        if getattr(self, 'is_syncing_offline_data', False):
+            return
+        self.is_syncing_offline_data = True
+
         keys = list(self.offline_store.keys())
         unsynced = [k for k in keys if not self.offline_store.get(k).get('synced', False)]
         if not unsynced:
+            self.is_syncing_offline_data = False # تحرير القفل
             self._reset_notification_state(0)
             return
+            
         sorted_keys = sorted(unsynced, key=lambda x: int(x.split('_')[0]) if x.split('_')[0].isdigit() else 0)
         key = sorted_keys[0]
         try:
@@ -3848,6 +3867,7 @@ class StockApp(MDApp):
                 endpoint = '/api/submit_driver_request'
 
             def next_step(*args):
+                self.is_syncing_offline_data = False 
                 Clock.schedule_once(lambda d: self.try_sync_offline_data(), 0.5)
 
             def success(r, res):
@@ -3866,10 +3886,13 @@ class StockApp(MDApp):
                 next_step()
 
             def failure(req, err):
+                self.is_syncing_offline_data = False 
                 print(f'[Sync Error] Stopping sync queue due to error in {key}: {err}')
                 self.notify(f'Sync Paused: Error in item {key}', 'error')
+                
             UrlRequest(f'{self.api_base}{endpoint}', req_body=json.dumps(data), req_headers={'Content-type': 'application/json'}, method='POST', on_success=success, on_failure=failure, on_error=failure, timeout=10)
         except Exception as e:
+            self.is_syncing_offline_data = False 
             print(f'Sync Logic Error: {e}')
 
     def notify(self, text, type='info'):
@@ -6334,13 +6357,18 @@ class StockApp(MDApp):
 
     def finalize_submission(self, total_amount):
         current_time = time.time()
-        if current_time - getattr(self, '_last_click_time', 0) < 1.0:
+        if current_time - getattr(self, '_last_click_time_pay', 0) < 2.0:
             return
-        self._last_click_time = current_time
+        self._last_click_time_pay = current_time
+        
         if getattr(self, 'is_transaction_in_progress', False):
             return
-        if self.pay_dialog:
+        self.is_transaction_in_progress = True 
+
+        if getattr(self, 'pay_dialog', None):
             self.pay_dialog.dismiss()
+            self.pay_dialog = None 
+
         payment_method = ''
         if self.current_mode in ['invoice_sale', 'invoice_purchase']:
             if hasattr(self, 'payment_methods') and hasattr(self, 'current_method_index'):
@@ -6355,15 +6383,23 @@ class StockApp(MDApp):
                 paid_amount = float(self.txt_paid.get_value()) if self.txt_paid.get_value() else 0
             except:
                 paid_amount = 0
+            
             if paid_amount < total_amount:
+                self.is_transaction_in_progress = False 
                 remaining = total_amount - paid_amount
                 self.show_credit_warning(paid_amount, total_amount, remaining)
                 return
             if paid_amount > total_amount and self.current_mode not in ['return_sale', 'return_purchase']:
+                self.is_transaction_in_progress = False 
                 excess = paid_amount - total_amount
                 self.show_overpayment_dialog(paid_amount, total_amount, excess)
                 return
-        Clock.schedule_once(lambda dt: self.process_transaction(paid_amount, total_amount, method=payment_method), 0.1)
+                
+        def _trigger_process(dt):
+            self.is_transaction_in_progress = False 
+            self.process_transaction(paid_amount, total_amount, method=payment_method)
+            
+        Clock.schedule_once(_trigger_process, 0.1)
 
     def _cycle_payment_method(self, instance):
         self.current_method_index = (self.current_method_index + 1) % len(self.payment_methods)
