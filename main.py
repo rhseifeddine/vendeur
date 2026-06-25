@@ -623,10 +623,8 @@ class StockApp(MDApp):
         content.add_widget(info_label)
         scroll = MDScrollView(size_hint_y=None, height=dp(250))
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
-        
         indexed_servers = list(enumerate(self.sync_servers_list))
         indexed_servers.sort(key=lambda item: str(item[1].get('name', '')).lower())
-        
         for original_idx, srv in indexed_servers:
             srv_name = self.fix_text(srv.get('name', f'Magasin {original_idx + 1}'))
             card = MDCard(orientation='horizontal', padding=[dp(10), dp(5), dp(15), dp(5)], spacing=dp(10), size_hint_y=None, height=dp(55), radius=[10], elevation=1, md_bg_color=(0.98, 0.98, 0.98, 1))
@@ -640,7 +638,6 @@ class StockApp(MDApp):
             self.sync_status_icons[original_idx] = icon_status
             card.add_widget(icon_status)
             list_layout.add_widget(card)
-            
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         self.btn_start_sync = MDRaisedButton(text='DÉMARRER', md_bg_color=(0.1, 0.5, 0.8, 1), disabled=True, on_release=self.execute_articles_sync)
@@ -678,36 +675,27 @@ class StockApp(MDApp):
         import os
         import re
         from kivy.clock import Clock
-        
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
         os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
-        
         local_ip = str(srv.get('local_ip', '')).strip()
         ext_ip = str(srv.get('ext_ip', '')).strip()
         urls_to_test = []
-        
         if ext_ip:
             urls_to_test.append(f"https://{ext_ip.replace('https://', '').replace('http://', '').strip('/')}")
         if local_ip:
             urls_to_test.append(f"http://{local_ip.replace('http://', '').strip('/')}:{DEFAULT_PORT}")
-                
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'application/json'
-        }
-                
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36', 'Accept': 'application/json'}
         for test_url in urls_to_test:
             try:
                 res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=10, verify=False)
                 if res.status_code == 200:
                     return test_url
                 else:
-                    err = f"Rejeté par Cloudflare (Code: {res.status_code})"
-                    Clock.schedule_once(lambda dt, msg=err: self.notify(msg, "error"), 0)
+                    err = f'Rejeté par Cloudflare (Code: {res.status_code})'
+                    Clock.schedule_once(lambda dt, msg=err: self.notify(msg, 'error'), 0)
             except Exception as e:
-                err_msg = str(e)[:45] 
-                Clock.schedule_once(lambda dt, msg=err_msg: self.notify(f"Erreur de connexion : {msg}", "error"), 0)
+                err_msg = str(e)[:45]
+                Clock.schedule_once(lambda dt, msg=err_msg: self.notify(f'Erreur de connexion : {msg}', 'error'), 0)
                 continue
         return None
 
@@ -766,64 +754,56 @@ class StockApp(MDApp):
         import concurrent.futures
         from kivy.clock import Clock
         import time
-
         session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Connection': 'keep-alive'
-        })
-
+        session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36', 'Accept': 'application/json', 'Connection': 'keep-alive'})
         try:
             selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
             total_stores = len(selected_indexes)
-            
             if total_stores == 0:
                 Clock.schedule_once(lambda dt: self.show_sync_report({}), 0)
                 return
-
             report_data = {}
             for i in selected_indexes:
                 srv = self.sync_servers_list[i]
                 report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
-
             self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...')
 
             def generate_barcodes(idx):
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
-                if not url: return
+                if not url:
+                    return
                 headers = {}
-                if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
+                if srv.get('pin'):
+                    headers['X-Server-PIN'] = str(srv.get('pin'))
                 try:
                     session.post(f'{url}/api/generate_barcodes', headers=headers, timeout=20, verify=False)
-                except: pass
-
+                except:
+                    pass
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
                 executor.map(generate_barcodes, selected_indexes)
-
             self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...')
             store_catalogs = {}
 
             def fetch_catalog(idx):
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
-                if not url: return (idx, None)
+                if not url:
+                    return (idx, None)
                 headers = {}
-                if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
+                if srv.get('pin'):
+                    headers['X-Server-PIN'] = str(srv.get('pin'))
                 try:
                     res = session.get(f'{url}/api/products?limit=999999', headers=headers, timeout=40, verify=False)
-                    if res.status_code == 200: 
+                    if res.status_code == 200:
                         return (idx, res.json())
-                except: pass
+                except:
+                    pass
                 return (idx, None)
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
                 results = executor.map(fetch_catalog, selected_indexes)
-
             master_catalog = {}
             self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...')
-
             for idx, prods_data in results:
                 if prods_data:
                     prods_list = []
@@ -836,7 +816,6 @@ class StockApp(MDApp):
                             prods_list = list(prods_data.values())
                     elif isinstance(prods_data, list):
                         prods_list = prods_data
-
                     store_dict = {}
                     for p in prods_list:
                         bc = str(p.get('barcode', '')).strip()
@@ -849,39 +828,24 @@ class StockApp(MDApp):
                     report_data[idx]['total'] = int(len(prods_list))
                 else:
                     report_data[idx]['status'] = 'Hors ligne'
-
             self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...')
 
             def push_batch(idx):
-                if idx not in store_catalogs: return (idx, 0)
+                if idx not in store_catalogs:
+                    return (idx, 0)
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
                 local_catalog = store_catalogs[idx]
                 items_to_add = []
-
                 for bc, master_p in master_catalog.items():
                     if bc not in local_catalog:
-                        items_to_add.append({
-                            'name': str(master_p.get('name', '')),
-                            'barcode': bc,
-                            'description': str(master_p.get('description', '')),
-                            'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''),
-                            'category': str(master_p.get('category', '')),
-                            'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0),
-                            'price': float(master_p.get('price', 0) or 0),
-                            'price_semi': float(master_p.get('price_semi', 0) or 0),
-                            'price_wholesale': float(master_p.get('price_wholesale', 0) or 0),
-                            'image_path': str(master_p.get('image', '')),
-                            'unit': str(master_p.get('unit', '')),
-                            'tva': float(master_p.get('tva', 0) or 0)
-                        })
-
+                        items_to_add.append({'name': str(master_p.get('name', '')), 'barcode': bc, 'description': str(master_p.get('description', '')), 'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''), 'category': str(master_p.get('category', '')), 'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0), 'price': float(master_p.get('price', 0) or 0), 'price_semi': float(master_p.get('price_semi', 0) or 0), 'price_wholesale': float(master_p.get('price_wholesale', 0) or 0), 'image_path': str(master_p.get('image', '')), 'unit': str(master_p.get('unit', '')), 'tva': float(master_p.get('tva', 0) or 0)})
                 added_count = 0
                 if items_to_add:
                     headers = {}
-                    if srv.get('pin'): headers['X-Server-PIN'] = str(srv.get('pin'))
-                    
-                    chunk_size = 300  
+                    if srv.get('pin'):
+                        headers['X-Server-PIN'] = str(srv.get('pin'))
+                    chunk_size = 300
                     for i in range(0, len(items_to_add), chunk_size):
                         chunk = items_to_add[i:i + chunk_size]
                         try:
@@ -889,29 +853,28 @@ class StockApp(MDApp):
                             if post_res.status_code == 200:
                                 try:
                                     resp_data = post_res.json()
-                                    if 'added' in resp_data: added_count += int(resp_data['added'])
-                                    elif 'count' in resp_data: added_count += int(resp_data['count'])
-                                    else: added_count += len(chunk)
+                                    if 'added' in resp_data:
+                                        added_count += int(resp_data['added'])
+                                    elif 'count' in resp_data:
+                                        added_count += int(resp_data['count'])
+                                    else:
+                                        added_count += len(chunk)
                                 except:
                                     added_count += len(chunk)
-                        except: pass
-
+                        except:
+                            pass
                 return (idx, added_count)
-
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
                 push_results = executor.map(push_batch, selected_indexes)
-
             for idx, added in push_results:
                 safe_added = int(added)
                 report_data[idx]['added'] = safe_added
                 report_data[idx]['total'] += safe_added
-
             self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
             time.sleep(0.5)
             Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
-
         except Exception as global_e:
-            print(f"[Sync FATAL ERROR] {global_e}")
+            print(f'[Sync FATAL ERROR] {global_e}')
             self._update_sync_ui_progress(100, 'Erreur', f'Erreur: {str(global_e)[:30]}')
             Clock.schedule_once(lambda dt: self.show_sync_report({}), 1)
 
@@ -953,9 +916,7 @@ class StockApp(MDApp):
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[dp(5), dp(5), dp(5), dp(15)])
         if not report_data:
             list_layout.add_widget(MDLabel(text='Aucune donnée disponible.', halign='center', theme_text_color='Hint'))
-            
         sorted_report = sorted(report_data.items(), key=lambda x: str(x[1].get('name', '')).lower())
-        
         for i, r_data in sorted_report:
             s_name = self.fix_text(str(r_data.get('name', 'Magasin')))
             s_added = int(r_data.get('added', 0))
@@ -978,7 +939,6 @@ class StockApp(MDApp):
                 badge.add_widget(MDLabel(text=f'+{s_added}', halign='center', bold=True, theme_text_color='Custom', text_color=badge_color, font_size='14sp'))
                 store_card.add_widget(badge)
             list_layout.add_widget(store_card)
-            
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         btn_close = MDFillRoundFlatButton(text='TERMINER', font_size='16sp', size_hint_x=1, height=dp(50), md_bg_color=(0.1, 0.1, 0.1, 1), on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
@@ -1404,7 +1364,6 @@ class StockApp(MDApp):
         if hasattr(self, 'remote_transfer_dialog') and self.remote_transfer_dialog:
             self.remote_transfer_dialog.dismiss()
             self.remote_transfer_dialog = None
-
         self.target_remote_server = target_server
         self.target_remote_url = working_url
         self.exchange_step = 1
@@ -1412,23 +1371,15 @@ class StockApp(MDApp):
         self.current_mode = mode_transfert
         self.cart = []
         self.selected_entity = {'id': None, 'name': target_server.get('name', 'Magasin Distant')}
-
-        title_map = {
-            'remote_transfer_out': f"Envoi vers: {target_server.get('name')}",
-            'remote_transfer_in': f"Réception de: {target_server.get('name')}",
-            'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}"
-        }
+        title_map = {'remote_transfer_out': f"Envoi vers: {target_server.get('name')}", 'remote_transfer_in': f"Réception de: {target_server.get('name')}", 'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}"}
         self.prod_toolbar.title = self.fix_text(title_map.get(mode_transfert, 'Opération'))
         self.theme_cls.primary_palette = 'DeepPurple'
         self.prod_toolbar.right_action_items = []
-        
         if hasattr(self, 'btn_add_prod') and self.btn_add_prod in self.prod_search_layout.children:
             self.prod_search_layout.remove_widget(self.btn_add_prod)
         if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
             self.prod_search_layout.add_widget(self.btn_scan_prod)
-
         self.update_cart_button()
-        
         self.current_product_list_source = []
         self.load_more_products(reset=True)
 
@@ -1436,69 +1387,30 @@ class StockApp(MDApp):
             self.sm.current = 'products'
             self.notify(f"Connexion à {target_server.get('name')}...", 'info')
             self._fetch_remote_products_for_transfer(mode_transfert)
-            
         Clock.schedule_once(switch_and_fetch, 0.2)
 
     def _fetch_remote_products_for_transfer(self, mode_transfert):
         import threading
-        
+        import os
+        import time
+        from kivy.clock import mainthread
+        from kivy.storage.jsonstore import JsonStore
+        cache_file = os.path.join(self.user_data_dir, 'remote_stores_cache.json')
+        remote_cache = JsonStore(cache_file)
+        target_name = self.target_remote_server.get('name', 'Inconnu')
+        cache_key = f"store_{target_name.replace(' ', '_')}"
         try:
             base_url = self.target_remote_url.split('/api/')[0]
-            target_products_url = f"{base_url}/api/products?limit=999999"
+            target_products_url = f'{base_url}/api/products?limit=999999'
         except:
             target_products_url = self.target_remote_url
-
         pin = self.target_remote_server.get('pin', '')
 
-        def fetch_worker():
-            import requests
-            import urllib3
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            from kivy.clock import mainthread
-
-            headers = {'Accept': 'application/json'}
-            if pin:
-                headers['X-Server-PIN'] = str(pin)
-
+        def process_and_display_products(target_prods, is_from_cache=False):
             try:
-                response = requests.get(target_products_url, headers=headers, timeout=20, verify=False)
-                
-                if response.status_code != 200:
-                    @mainthread
-                    def show_http_err():
-                        self.notify(f"Erreur serveur distant: {response.status_code}", "error")
-                    show_http_err()
-                    return
-
-                res_json = response.json()
-                
-                target_prods = []
-                if isinstance(res_json, dict):
-                    if 'data' in res_json and isinstance(res_json['data'], list):
-                        target_prods = res_json['data']
-                    elif 'products' in res_json and isinstance(res_json['products'], list):
-                        target_prods = res_json['products']
-                    else:
-                        target_prods = list(res_json.values())
-                elif isinstance(res_json, list):
-                    target_prods = res_json
-
-                if not target_prods:
-                    @mainthread
-                    def show_empty_err():
-                        self.notify("Le magasin distant est vide (0 produits).", "warning")
-                    show_empty_err()
-                    return
-
-                target_barcodes_map = {}
-                for p in target_prods:
-                    bc = str(p.get('barcode', '')).strip()
-                    if bc:
-                        target_barcodes_map[bc] = p
-
+                target_barcodes_map = {str(p.get('barcode', '')).strip(): p for p in target_prods if str(p.get('barcode', '')).strip()}
                 filtered_local_products_out = []
                 filtered_local_products_in = []
-                
                 for lp in self.all_products_raw:
                     bc = str(lp.get('barcode', '')).strip()
                     if bc and bc in target_barcodes_map:
@@ -1512,10 +1424,8 @@ class StockApp(MDApp):
                             mapped_p['stock_store'] = rp.get('stock_store', 0)
                         mapped_p['stock_warehouse'] = rp.get('stock_warehouse', 0)
                         filtered_local_products_in.append(mapped_p)
-
                 self.remote_filtered_products_out = filtered_local_products_out
                 self.remote_filtered_products_in = filtered_local_products_in
-
                 if mode_transfert == 'remote_transfer_in':
                     final_list = self.remote_filtered_products_in
                 else:
@@ -1524,26 +1434,73 @@ class StockApp(MDApp):
                 @mainthread
                 def update_ui():
                     if not final_list:
-                        self.notify("Aucun produit commun (Code-barres manquant) !", "error")
+                        if not is_from_cache:
+                            self.notify('Aucun produit commun (Code-barres manquant).', 'error')
                     else:
-                        self.notify(f"{len(final_list)} Produits chargés avec succès !", "success")
+                        msg = 'Chargement rapide (Cache)' if is_from_cache else 'Stock mis à jour avec succès !'
+                        self.notify(f'{len(final_list)} Produits. {msg}', 'success')
                     self.prepare_products_for_rv(final_list)
-
                 update_ui()
-
-            except requests.exceptions.RequestException as req_err:
-                @mainthread
-                def show_req_err():
-                    self.notify("Connexion au magasin distant échouée.", "error")
-                show_req_err()
-                
             except Exception as e:
-                err_msg = str(e)[:30]
-                @mainthread
-                def show_crash_err():
-                    self.notify(f"Erreur système: {err_msg}", "error")
-                show_crash_err()
+                pass
+        has_cache = remote_cache.exists(cache_key)
+        if has_cache:
+            cached_data = remote_cache.get(cache_key)
+            cached_prods = cached_data.get('products', [])
+            if cached_prods:
+                threading.Thread(target=process_and_display_products, args=(cached_prods, True), daemon=True).start()
 
+        def fetch_worker():
+            import requests
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            headers = {'Accept': 'application/json'}
+            if pin:
+                headers['X-Server-PIN'] = str(pin)
+            try:
+                response = requests.get(target_products_url, headers=headers, timeout=8, verify=False)
+                if response.status_code == 200:
+                    res_json = response.json()
+                    target_prods = []
+                    if isinstance(res_json, dict):
+                        if 'data' in res_json and isinstance(res_json['data'], list):
+                            target_prods = res_json['data']
+                        elif 'products' in res_json and isinstance(res_json['products'], list):
+                            target_prods = res_json['products']
+                        else:
+                            target_prods = list(res_json.values())
+                    elif isinstance(res_json, list):
+                        target_prods = res_json
+                    if target_prods:
+                        remote_cache.put(cache_key, products=target_prods, timestamp=time.time())
+                        process_and_display_products(target_prods, is_from_cache=False)
+                    elif not has_cache:
+
+                        @mainthread
+                        def show_empty_err():
+                            self.notify('Le magasin distant est vide.', 'warning')
+                        show_empty_err()
+                elif not has_cache:
+
+                    @mainthread
+                    def show_http_err():
+                        self.notify(f'Erreur serveur: {response.status_code}', 'error')
+                    show_http_err()
+            except requests.exceptions.RequestException:
+                if not has_cache:
+
+                    @mainthread
+                    def show_req_err():
+                        self.notify('Connexion échouée. Aucune donnée locale.', 'error')
+                    show_req_err()
+                else:
+
+                    @mainthread
+                    def show_offline_msg():
+                        self.notify('Réseau faible. Utilisation des données locales.', 'warning')
+                    show_offline_msg()
+            except Exception as e:
+                pass
         threading.Thread(target=fetch_worker, daemon=True).start()
 
     @mainthread
@@ -1585,7 +1542,18 @@ class StockApp(MDApp):
             filtered = [p for p in base_list if p.get('has_promo', False)]
         else:
             tokens = query_clean.split()
-            filtered = [p for p in base_list if all((token in str(p.get('name', '')).lower() for token in tokens)) or query_clean in str(p.get('barcode', '')).lower() or query_clean in str(p.get('product_ref', '')).lower()]
+            filtered = []
+            for p in base_list:
+                name_str = str(p.get('name', '')).lower()
+                barcode_str = str(p.get('barcode', '')).lower()
+                prod_ref_str = str(p.get('product_ref', '')).lower()
+                ref_str = str(p.get('ref', '')).lower()
+                desc_str = str(p.get('description', '')).lower()
+                reference_str = str(p.get('reference', '')).lower()
+                if query_clean in barcode_str or query_clean in prod_ref_str or query_clean in ref_str or (query_clean in desc_str) or (query_clean in reference_str):
+                    filtered.append(p)
+                elif all((token in name_str for token in tokens)):
+                    filtered.append(p)
         self._prepare_and_send_data(filtered[:50])
 
     def _prepare_and_send_data(self, products_list):
@@ -2984,40 +2952,33 @@ class StockApp(MDApp):
     def validate_cart_action(self, instance):
         if getattr(self, 'is_transaction_in_progress', False):
             return
-            
         current_time = time.time()
         if current_time - getattr(self, '_last_cart_validate_time', 0) < 1.5:
             return
         self._last_cart_validate_time = current_time
-        
         if instance:
             instance.disabled = True
             Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 2.0)
-
         if self.current_mode == 'request_stock':
             self.submit_stock_request()
-            
         elif self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 1:
             if not self.cart:
                 self.notify("Le panier d'envoi est vide !", 'error')
                 return
-            
             self.exchange_sent_cart = list(self.cart)
             self.cart = []
             self.exchange_step = 2
             self.update_cart_button()
             self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
             self.notify('Envoi validé. Sélectionnez ce que vous recevez.', 'info')
-            
             if hasattr(self, 'remote_filtered_products_in'):
                 self.current_product_list_source = self.remote_filtered_products_in
                 self.load_more_products(reset=True)
-                
+
             def switch_to_products(dt):
                 self.sm.transition.direction = 'right'
                 self.sm.current = 'products'
             Clock.schedule_once(switch_to_products, 0.1)
-            
         elif self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
             self.submit_remote_transfer()
         else:
@@ -3921,18 +3882,15 @@ class StockApp(MDApp):
             return
         if not getattr(self, 'is_server_reachable', False):
             return
-        
         if getattr(self, 'is_syncing_offline_data', False):
             return
         self.is_syncing_offline_data = True
-
         keys = list(self.offline_store.keys())
         unsynced = [k for k in keys if not self.offline_store.get(k).get('synced', False)]
         if not unsynced:
-            self.is_syncing_offline_data = False # تحرير القفل
+            self.is_syncing_offline_data = False
             self._reset_notification_state(0)
             return
-            
         sorted_keys = sorted(unsynced, key=lambda x: int(x.split('_')[0]) if x.split('_')[0].isdigit() else 0)
         key = sorted_keys[0]
         try:
@@ -3945,7 +3903,7 @@ class StockApp(MDApp):
                 endpoint = '/api/submit_driver_request'
 
             def next_step(*args):
-                self.is_syncing_offline_data = False 
+                self.is_syncing_offline_data = False
                 Clock.schedule_once(lambda d: self.try_sync_offline_data(), 0.5)
 
             def success(r, res):
@@ -3964,13 +3922,12 @@ class StockApp(MDApp):
                 next_step()
 
             def failure(req, err):
-                self.is_syncing_offline_data = False 
+                self.is_syncing_offline_data = False
                 print(f'[Sync Error] Stopping sync queue due to error in {key}: {err}')
                 self.notify(f'Sync Paused: Error in item {key}', 'error')
-                
             UrlRequest(f'{self.api_base}{endpoint}', req_body=json.dumps(data), req_headers={'Content-type': 'application/json'}, method='POST', on_success=success, on_failure=failure, on_error=failure, timeout=10)
         except Exception as e:
-            self.is_syncing_offline_data = False 
+            self.is_syncing_offline_data = False
             print(f'Sync Logic Error: {e}')
 
     def notify(self, text, type='info'):
@@ -5125,6 +5082,7 @@ class StockApp(MDApp):
             srv_local = srv.get('local_ip', '192.168.1.100')
             srv_ext = srv.get('ext_ip', '')
             srv_pin = srv.get('pin', '')
+        scroll = MDScrollView(size_hint_y=None, height=dp(340))
         content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, adaptive_height=True, padding=[0, dp(10), 0, dp(5)])
         self.field_srv_name = SmartTextField(text=srv_name, hint_text='Nom du Magasin', mode='rectangle', icon_right='store')
         self.field_srv_local = MDTextField(text=srv_local, hint_text='IP Locale (Wifi)', mode='rectangle', icon_right='router-wireless')
@@ -5140,6 +5098,7 @@ class StockApp(MDApp):
         content.add_widget(self.field_srv_local)
         content.add_widget(self.field_srv_ext)
         content.add_widget(self.pin_container)
+        scroll.add_widget(content)
 
         def check_ext_ip(instance, text):
             has_letters = bool(text.strip() and re.search('[a-zA-Z]', text))
@@ -5158,7 +5117,7 @@ class StockApp(MDApp):
             buttons.append(MDRaisedButton(text='SUPPRIMER', md_bg_color=(0.8, 0.2, 0.2, 1), on_release=lambda x: self.delete_server_config(index)))
         buttons.append(MDRaisedButton(text='ENREGISTRER', md_bg_color=(0, 0.6, 0.2, 1), on_release=lambda x: self.save_server_config(index)))
         title_text = 'Nouveau Magasin' if is_new else f'Détails : {self.fix_text(srv_name)}'
-        self.dialog_edit_srv = MDDialog(title=title_text, type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=buttons)
+        self.dialog_edit_srv = MDDialog(title=title_text, type='custom', content_cls=scroll, radius=[15, 15, 15, 15], buttons=buttons)
         self.dialog_edit_srv.open()
         Clock.schedule_once(lambda dt: setattr(self.field_srv_name, 'focus', True), 0.3)
 
@@ -6438,15 +6397,12 @@ class StockApp(MDApp):
         if current_time - getattr(self, '_last_click_time_pay', 0) < 2.0:
             return
         self._last_click_time_pay = current_time
-        
         if getattr(self, 'is_transaction_in_progress', False):
             return
-        self.is_transaction_in_progress = True 
-
+        self.is_transaction_in_progress = True
         if getattr(self, 'pay_dialog', None):
             self.pay_dialog.dismiss()
-            self.pay_dialog = None 
-
+            self.pay_dialog = None
         payment_method = ''
         if self.current_mode in ['invoice_sale', 'invoice_purchase']:
             if hasattr(self, 'payment_methods') and hasattr(self, 'current_method_index'):
@@ -6461,22 +6417,20 @@ class StockApp(MDApp):
                 paid_amount = float(self.txt_paid.get_value()) if self.txt_paid.get_value() else 0
             except:
                 paid_amount = 0
-            
             if paid_amount < total_amount:
-                self.is_transaction_in_progress = False 
+                self.is_transaction_in_progress = False
                 remaining = total_amount - paid_amount
                 self.show_credit_warning(paid_amount, total_amount, remaining)
                 return
             if paid_amount > total_amount and self.current_mode not in ['return_sale', 'return_purchase']:
-                self.is_transaction_in_progress = False 
+                self.is_transaction_in_progress = False
                 excess = paid_amount - total_amount
                 self.show_overpayment_dialog(paid_amount, total_amount, excess)
                 return
-                
+
         def _trigger_process(dt):
-            self.is_transaction_in_progress = False 
+            self.is_transaction_in_progress = False
             self.process_transaction(paid_amount, total_amount, method=payment_method)
-            
         Clock.schedule_once(_trigger_process, 0.1)
 
     def _cycle_payment_method(self, instance):
