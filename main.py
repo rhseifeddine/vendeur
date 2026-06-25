@@ -1440,11 +1440,16 @@ class StockApp(MDApp):
         Clock.schedule_once(switch_and_fetch, 0.2)
 
     def _fetch_remote_products_for_transfer(self, mode_transfert):
-        target_products_url = self.target_remote_url.replace('/api/submit_order', '/api/products') + '?limit=999999'
-        req_headers = {'Content-type': 'application/json'}
+        try:
+            base_url = self.target_remote_url.split('/api/')[0]
+            target_products_url = f"{base_url}/api/products?limit=999999"
+        except:
+            target_products_url = self.target_remote_url
+
+        req_headers = {'Content-type': 'application/json', 'Accept': 'application/json'}
         pin = self.target_remote_server.get('pin', '')
         if pin:
-            req_headers['X-Server-PIN'] = pin
+            req_headers['X-Server-PIN'] = str(pin)
 
         def on_success_fetch(req, res):
             try:
@@ -1459,12 +1464,20 @@ class StockApp(MDApp):
                 elif isinstance(res, list):
                     target_prods = res
 
+                if not target_prods:
+                    Clock.schedule_once(lambda dt: self.notify("Le magasin distant n'a aucun produit.", "warning"), 0)
+                    return
+
                 target_barcodes_map = {}
                 for p in target_prods:
                     bc = str(p.get('barcode', '')).strip()
                     if bc:
                         target_barcodes_map[bc] = p
-                        
+                
+                if not target_barcodes_map:
+                    Clock.schedule_once(lambda dt: self.notify("Aucun code-barre trouvé côté distant.", "error"), 0)
+                    return
+
                 filtered_local_products_out = []
                 filtered_local_products_in = []
                 
@@ -1481,26 +1494,42 @@ class StockApp(MDApp):
                             mapped_p['stock_store'] = rp.get('stock_store', 0)
                         mapped_p['stock_warehouse'] = rp.get('stock_warehouse', 0)
                         filtered_local_products_in.append(mapped_p)
-                        
+                
                 self.remote_filtered_products_out = filtered_local_products_out
                 self.remote_filtered_products_in = filtered_local_products_in
 
+                if mode_transfert == 'remote_transfer_in':
+                    final_list = self.remote_filtered_products_in
+                else:
+                    final_list = self.remote_filtered_products_out
+
                 def update_ui(dt):
-                    if self.current_mode == 'remote_transfer_in':
-                        self.current_product_list_source = self.remote_filtered_products_in
+                    if not final_list:
+                        self.notify("Aucun produit commun (via Code-barre) !", "error")
                     else:
-                        self.current_product_list_source = self.remote_filtered_products_out
-                    self.load_more_products(reset=True)
-                    self.notify('Produits compatibles chargés !', 'success')
+                        self.notify(f"{len(final_list)} Produits compatibles chargés !", "success")
+                    self.prepare_products_for_rv(final_list)
 
                 Clock.schedule_once(update_ui, 0)
+                
             except Exception as e:
-                Clock.schedule_once(lambda dt: self.notify('Erreur lors du filtrage des produits.', 'error'), 0)
+                print(f"Match Error: {e}")
+                err_msg = str(e)[:25]
+                Clock.schedule_once(lambda dt: self.notify(f"Erreur d'analyse: {err_msg}", "error"), 0)
 
         def on_fail_fetch(req, err):
-            Clock.schedule_once(lambda dt: self.notify('Impossible de récupérer les produits distants.', 'error'), 0)
+            err_str = str(err)[:25] if err else "Inconnue"
+            Clock.schedule_once(lambda dt: self.notify(f"Échec serveur distant: {err_str}", "error"), 0)
 
-        UrlRequest(target_products_url, req_headers=req_headers, on_success=on_success_fetch, on_failure=on_fail_fetch, on_error=on_fail_fetch, timeout=15, verify=False)
+        UrlRequest(
+            target_products_url, 
+            req_headers=req_headers, 
+            on_success=on_success_fetch, 
+            on_failure=on_fail_fetch, 
+            on_error=on_fail_fetch, 
+            timeout=15, 
+            verify=False
+        )
 
     @mainthread
     def _append_to_rv(self, new_data, reset=False):
