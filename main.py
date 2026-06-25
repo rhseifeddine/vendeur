@@ -1440,32 +1440,54 @@ class StockApp(MDApp):
         Clock.schedule_once(switch_and_fetch, 0.2)
 
     def _fetch_remote_products_for_transfer(self, mode_transfert):
+        import threading
+        
         try:
             base_url = self.target_remote_url.split('/api/')[0]
             target_products_url = f"{base_url}/api/products?limit=999999"
         except:
             target_products_url = self.target_remote_url
 
-        req_headers = {'Content-type': 'application/json', 'Accept': 'application/json'}
         pin = self.target_remote_server.get('pin', '')
-        if pin:
-            req_headers['X-Server-PIN'] = str(pin)
 
-        def on_success_fetch(req, res):
+        def fetch_worker():
+            import requests
+            import urllib3
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            from kivy.clock import mainthread
+
+            headers = {'Accept': 'application/json'}
+            if pin:
+                headers['X-Server-PIN'] = str(pin)
+
             try:
+                response = requests.get(target_products_url, headers=headers, timeout=20, verify=False)
+                
+                if response.status_code != 200:
+                    @mainthread
+                    def show_http_err():
+                        self.notify(f"Erreur serveur distant: {response.status_code}", "error")
+                    show_http_err()
+                    return
+
+                res_json = response.json()
+                
                 target_prods = []
-                if isinstance(res, dict):
-                    if 'data' in res and isinstance(res['data'], list):
-                        target_prods = res['data']
-                    elif 'products' in res and isinstance(res['products'], list):
-                        target_prods = res['products']
+                if isinstance(res_json, dict):
+                    if 'data' in res_json and isinstance(res_json['data'], list):
+                        target_prods = res_json['data']
+                    elif 'products' in res_json and isinstance(res_json['products'], list):
+                        target_prods = res_json['products']
                     else:
-                        target_prods = list(res.values())
-                elif isinstance(res, list):
-                    target_prods = res
+                        target_prods = list(res_json.values())
+                elif isinstance(res_json, list):
+                    target_prods = res_json
 
                 if not target_prods:
-                    Clock.schedule_once(lambda dt: self.notify("Le magasin distant n'a aucun produit.", "warning"), 0)
+                    @mainthread
+                    def show_empty_err():
+                        self.notify("Le magasin distant est vide (0 produits).", "warning")
+                    show_empty_err()
                     return
 
                 target_barcodes_map = {}
@@ -1473,10 +1495,6 @@ class StockApp(MDApp):
                     bc = str(p.get('barcode', '')).strip()
                     if bc:
                         target_barcodes_map[bc] = p
-                
-                if not target_barcodes_map:
-                    Clock.schedule_once(lambda dt: self.notify("Aucun code-barre trouvé côté distant.", "error"), 0)
-                    return
 
                 filtered_local_products_out = []
                 filtered_local_products_in = []
@@ -1494,7 +1512,7 @@ class StockApp(MDApp):
                             mapped_p['stock_store'] = rp.get('stock_store', 0)
                         mapped_p['stock_warehouse'] = rp.get('stock_warehouse', 0)
                         filtered_local_products_in.append(mapped_p)
-                
+
                 self.remote_filtered_products_out = filtered_local_products_out
                 self.remote_filtered_products_in = filtered_local_products_in
 
@@ -1503,33 +1521,30 @@ class StockApp(MDApp):
                 else:
                     final_list = self.remote_filtered_products_out
 
-                def update_ui(dt):
+                @mainthread
+                def update_ui():
                     if not final_list:
-                        self.notify("Aucun produit commun (via Code-barre) !", "error")
+                        self.notify("Aucun produit commun (Code-barres manquant) !", "error")
                     else:
-                        self.notify(f"{len(final_list)} Produits compatibles chargés !", "success")
+                        self.notify(f"{len(final_list)} Produits chargés avec succès !", "success")
                     self.prepare_products_for_rv(final_list)
 
-                Clock.schedule_once(update_ui, 0)
+                update_ui()
+
+            except requests.exceptions.RequestException as req_err:
+                @mainthread
+                def show_req_err():
+                    self.notify("Connexion au magasin distant échouée.", "error")
+                show_req_err()
                 
             except Exception as e:
-                print(f"Match Error: {e}")
-                err_msg = str(e)[:25]
-                Clock.schedule_once(lambda dt: self.notify(f"Erreur d'analyse: {err_msg}", "error"), 0)
+                err_msg = str(e)[:30]
+                @mainthread
+                def show_crash_err():
+                    self.notify(f"Erreur système: {err_msg}", "error")
+                show_crash_err()
 
-        def on_fail_fetch(req, err):
-            err_str = str(err)[:25] if err else "Inconnue"
-            Clock.schedule_once(lambda dt: self.notify(f"Échec serveur distant: {err_str}", "error"), 0)
-
-        UrlRequest(
-            target_products_url, 
-            req_headers=req_headers, 
-            on_success=on_success_fetch, 
-            on_failure=on_fail_fetch, 
-            on_error=on_fail_fetch, 
-            timeout=15, 
-            verify=False
-        )
+        threading.Thread(target=fetch_worker, daemon=True).start()
 
     @mainthread
     def _append_to_rv(self, new_data, reset=False):
