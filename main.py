@@ -1404,28 +1404,67 @@ class StockApp(MDApp):
         if hasattr(self, 'remote_transfer_dialog') and self.remote_transfer_dialog:
             self.remote_transfer_dialog.dismiss()
             self.remote_transfer_dialog = None
-            
+
         self.target_remote_server = target_server
         self.target_remote_url = working_url
         self.exchange_step = 1
         self.exchange_sent_cart = []
-        self.notify(f"Vérification des codes-barres avec {target_server.get('name')}...", 'info')
+        self.current_mode = mode_transfert
+        self.cart = []
+        self.selected_entity = {'id': None, 'name': target_server.get('name', 'Magasin Distant')}
+
+        title_map = {
+            'remote_transfer_out': f"Envoi vers: {target_server.get('name')}",
+            'remote_transfer_in': f"Réception de: {target_server.get('name')}",
+            'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}"
+        }
+        self.prod_toolbar.title = self.fix_text(title_map.get(mode_transfert, 'Opération'))
+        self.theme_cls.primary_palette = 'DeepPurple'
+        self.prod_toolbar.right_action_items = []
         
-        target_products_url = working_url.replace('/api/submit_order', '/api/products') + '?limit=999999'
+        if hasattr(self, 'btn_add_prod') and self.btn_add_prod in self.prod_search_layout.children:
+            self.prod_search_layout.remove_widget(self.btn_add_prod)
+        if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
+            self.prod_search_layout.add_widget(self.btn_scan_prod)
+
+        self.update_cart_button()
+        
+        self.current_product_list_source = []
+        self.load_more_products(reset=True)
+
+        def switch_and_fetch(dt):
+            self.sm.current = 'products'
+            self.notify(f"Connexion à {target_server.get('name')}...", 'info')
+            self._fetch_remote_products_for_transfer(mode_transfert)
+            
+        Clock.schedule_once(switch_and_fetch, 0.2)
+
+    def _fetch_remote_products_for_transfer(self, mode_transfert):
+        target_products_url = self.target_remote_url.replace('/api/submit_order', '/api/products') + '?limit=999999'
         req_headers = {'Content-type': 'application/json'}
-        pin = target_server.get('pin', '')
+        pin = self.target_remote_server.get('pin', '')
         if pin:
             req_headers['X-Server-PIN'] = pin
 
-        def process_success_on_main_thread(dt):
+        def on_success_fetch(req, res):
             try:
-                target_prods = getattr(self, '_temp_target_prods_data', [])
+                target_prods = []
+                if isinstance(res, dict):
+                    if 'data' in res and isinstance(res['data'], list):
+                        target_prods = res['data']
+                    elif 'products' in res and isinstance(res['products'], list):
+                        target_prods = res['products']
+                    else:
+                        target_prods = list(res.values())
+                elif isinstance(res, list):
+                    target_prods = res
+
                 target_barcodes_map = {}
                 for p in target_prods:
                     bc = str(p.get('barcode', '')).strip()
                     if bc:
                         target_barcodes_map[bc] = p
-                
+                        
                 filtered_local_products_out = []
                 filtered_local_products_in = []
                 
@@ -1442,69 +1481,26 @@ class StockApp(MDApp):
                             mapped_p['stock_store'] = rp.get('stock_store', 0)
                         mapped_p['stock_warehouse'] = rp.get('stock_warehouse', 0)
                         filtered_local_products_in.append(mapped_p)
-                
+                        
                 self.remote_filtered_products_out = filtered_local_products_out
                 self.remote_filtered_products_in = filtered_local_products_in
-                self.current_mode = mode_transfert
-                self.cart = []
-                self.selected_entity = {'id': None, 'name': target_server.get('name', 'Magasin Distant')}
-                self.update_cart_button()
-                
-                title_map = {
-                    'remote_transfer_out': f"Envoi vers: {target_server.get('name')}",
-                    'remote_transfer_in': f"Réception de: {target_server.get('name')}",
-                    'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}"
-                }
-                self.prod_toolbar.title = self.fix_text(title_map.get(mode_transfert, 'Opération'))
-                self.theme_cls.primary_palette = 'DeepPurple'
-                self.prod_toolbar.right_action_items = []
-                
-                if hasattr(self, 'btn_add_prod') and self.btn_add_prod in self.prod_search_layout.children:
-                    self.prod_search_layout.remove_widget(self.btn_add_prod)
-                if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
-                    self.prod_search_layout.add_widget(self.btn_scan_prod)
-                
-                if mode_transfert == 'remote_transfer_in':
-                    self.current_product_list_source = self.remote_filtered_products_in
-                else:
-                    self.current_product_list_source = self.remote_filtered_products_out
-                
-                self.load_more_products(reset=True)
-                self.sm.current = 'products'
-                self.notify('Produits compatibles chargés avec succès.', 'success')
+
+                def update_ui(dt):
+                    if self.current_mode == 'remote_transfer_in':
+                        self.current_product_list_source = self.remote_filtered_products_in
+                    else:
+                        self.current_product_list_source = self.remote_filtered_products_out
+                    self.load_more_products(reset=True)
+                    self.notify('Produits compatibles chargés !', 'success')
+
+                Clock.schedule_once(update_ui, 0)
             except Exception as e:
-                print(f'Error filtering remote products: {e}')
-                self.notify('Erreur lors de la vérification des produits.', 'error')
+                Clock.schedule_once(lambda dt: self.notify('Erreur lors du filtrage des produits.', 'error'), 0)
 
-        def on_target_prods_success(req, res):
-            target_prods = []
-            if isinstance(res, dict):
-                if 'data' in res and isinstance(res['data'], list):
-                    target_prods = res['data']
-                elif 'products' in res and isinstance(res['products'], list):
-                    target_prods = res['products']
-                else:
-                    target_prods = list(res.values())
-            elif isinstance(res, list):
-                target_prods = res
-            
-            self._temp_target_prods_data = target_prods
-            from kivy.clock import Clock
-            Clock.schedule_once(process_success_on_main_thread, 0.1)
+        def on_fail_fetch(req, err):
+            Clock.schedule_once(lambda dt: self.notify('Impossible de récupérer les produits distants.', 'error'), 0)
 
-        def on_target_prods_fail(req, err):
-            from kivy.clock import Clock
-            Clock.schedule_once(lambda dt: self.notify('Impossible de récupérer les produits du magasin cible.', 'error'), 0.1)
-
-        UrlRequest(
-            target_products_url, 
-            req_headers=req_headers, 
-            on_success=on_target_prods_success, 
-            on_failure=on_target_prods_fail, 
-            on_error=on_target_prods_fail, 
-            timeout=15,
-            verify=False
-        )
+        UrlRequest(target_products_url, req_headers=req_headers, on_success=on_success_fetch, on_failure=on_fail_fetch, on_error=on_fail_fetch, timeout=15, verify=False)
 
     @mainthread
     def _append_to_rv(self, new_data, reset=False):
@@ -2952,7 +2948,6 @@ class StockApp(MDApp):
         
         if instance:
             instance.disabled = True
-            from kivy.clock import Clock
             Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 2.0)
 
         if self.current_mode == 'request_stock':
@@ -2962,22 +2957,22 @@ class StockApp(MDApp):
             if not self.cart:
                 self.notify("Le panier d'envoi est vide !", 'error')
                 return
+            
             self.exchange_sent_cart = list(self.cart)
             self.cart = []
             self.exchange_step = 2
             self.update_cart_button()
             self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
-            self.notify('Envoi validé. Sélectionnez maintenant ce que vous recevez.', 'info')
+            self.notify('Envoi validé. Sélectionnez ce que vous recevez.', 'info')
+            
             if hasattr(self, 'remote_filtered_products_in'):
                 self.current_product_list_source = self.remote_filtered_products_in
                 self.load_more_products(reset=True)
-            
-            def change_screen(dt):
+                
+            def switch_to_products(dt):
                 self.sm.transition.direction = 'right'
                 self.sm.current = 'products'
-                
-            from kivy.clock import Clock
-            Clock.schedule_once(change_screen, 0.1)
+            Clock.schedule_once(switch_to_products, 0.1)
             
         elif self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
             self.submit_remote_transfer()
