@@ -607,6 +607,20 @@ class StockApp(MDApp):
                     print(f'Erreur Screen Flag: {e}')
             update_android_flag(active)
 
+    def generate_unique_ean13(self, existing_barcodes):
+        import random
+        while True:
+            random_part = str(random.randint(0, 99999999999)).zfill(11)
+            base_12 = f'7{random_part}'
+            odd_sum = sum((int(base_12[i]) for i in range(1, 12, 2)))
+            even_sum = sum((int(base_12[i]) for i in range(0, 12, 2)))
+            total = odd_sum * 3 + even_sum
+            check_digit = (10 - total % 10) % 10
+            new_barcode = f'{base_12}{check_digit}'
+            if new_barcode not in existing_barcodes:
+                existing_barcodes.add(new_barcode)
+                return new_barcode
+
     def open_sync_articles_dialog(self, instance):
         if getattr(self, 'is_syncing_articles', False):
             self.notify('Synchronisation en cours... Veuillez patienter.', 'warning')
@@ -747,6 +761,23 @@ class StockApp(MDApp):
             self.lbl_sync_step.text = step_text
             self.lbl_sync_detail.text = detail_text if detail_text else f'{int(percent)}%'
 
+    def show_success_checkmark_animation(self):
+        from kivy.uix.modalview import ModalView
+        from kivymd.uix.label import MDIcon
+        from kivy.animation import Animation
+        from kivy.clock import Clock
+        from kivy.metrics import dp
+        anim_view = ModalView(size_hint=(None, None), size=(dp(250), dp(250)), background_color=(0, 0, 0, 0), auto_dismiss=False)
+        icon = MDIcon(icon='check-circle', theme_text_color='Custom', text_color=(0, 0.7, 0.2, 1), font_size='0sp', pos_hint={'center_x': 0.5, 'center_y': 0.5})
+        anim_view.add_widget(icon)
+        anim_view.open()
+        anim = Animation(font_size=dp(180), opacity=1, d=0.4, t='out_back')
+        anim.start(icon)
+
+        def close_anim(dt):
+            anim_view.dismiss()
+        Clock.schedule_once(close_anim, 1.5)
+
     def _sync_articles_worker(self):
         import requests
         import urllib3
@@ -755,7 +786,7 @@ class StockApp(MDApp):
         from kivy.clock import Clock
         import time
         session = requests.Session()
-        session.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36', 'Accept': 'application/json', 'Connection': 'keep-alive'})
+        session.headers.update({'User-Agent': 'MagProMobile Sync', 'Accept': 'application/json', 'Connection': 'keep-alive'})
         try:
             selected_indexes = [i for i, srv in enumerate(self.sync_servers_list) if self.sync_selected_stores.get(i, False)]
             total_stores = len(selected_indexes)
@@ -766,9 +797,9 @@ class StockApp(MDApp):
             for i in selected_indexes:
                 srv = self.sync_servers_list[i]
                 report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
-            self._update_sync_ui_progress(10, 'Étape 1/2 : Génération des codes-barres', 'Traitement des articles sans code-barres...')
+            self._update_sync_ui_progress(10, 'Étape 1/3 : Génération Serveur', 'Demande aux serveurs de générer les codes manquants...')
 
-            def generate_barcodes(idx):
+            def request_server_generation(idx):
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
                 if not url:
@@ -781,9 +812,9 @@ class StockApp(MDApp):
                 except:
                     pass
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
-                executor.map(generate_barcodes, selected_indexes)
-            self._update_sync_ui_progress(30, 'Étape 2/2 : Unification des catalogues', 'Téléchargement des bases de données...')
-            store_catalogs = {}
+                executor.map(request_server_generation, selected_indexes)
+            self._update_sync_ui_progress(30, 'Étape 2/3 : Unification des catalogues', 'Téléchargement des bases de données...')
+            store_catalogs_raw = {}
 
             def fetch_catalog(idx):
                 srv = self.sync_servers_list[idx]
@@ -802,8 +833,9 @@ class StockApp(MDApp):
                 return (idx, None)
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
                 results = executor.map(fetch_catalog, selected_indexes)
-            master_catalog = {}
-            self._update_sync_ui_progress(50, 'Étape 2/2 : Unification des catalogues', 'Analyse et fusion des produits...')
+            self._update_sync_ui_progress(50, 'Étape 2/3 : Unification des catalogues', 'Analyse et fusion des produits...')
+            master_catalog_by_name = {}
+            existing_barcodes = set()
             for idx, prods_data in results:
                 if prods_data:
                     prods_list = []
@@ -816,30 +848,49 @@ class StockApp(MDApp):
                             prods_list = list(prods_data.values())
                     elif isinstance(prods_data, list):
                         prods_list = prods_data
-                    store_dict = {}
+                    store_catalogs_raw[idx] = prods_list
+                    report_data[idx]['status'] = 'Connecté'
+                    report_data[idx]['total'] = len(prods_list)
                     for p in prods_list:
+                        name = str(p.get('name', '')).strip()
+                        if not name:
+                            continue
+                        name_key = name.lower()
                         bc = str(p.get('barcode', '')).strip()
                         if bc:
-                            store_dict[bc] = p
-                            if bc not in master_catalog:
-                                master_catalog[bc] = p
-                    store_catalogs[idx] = store_dict
-                    report_data[idx]['status'] = 'Connecté'
-                    report_data[idx]['total'] = int(len(prods_list))
+                            existing_barcodes.add(bc)
+                        if name_key not in master_catalog_by_name:
+                            master_catalog_by_name[name_key] = p
+                        else:
+                            current_bc = str(master_catalog_by_name[name_key].get('barcode', '')).strip()
+                            if bc and (not current_bc):
+                                master_catalog_by_name[name_key] = p
                 else:
+                    store_catalogs_raw[idx] = []
                     report_data[idx]['status'] = 'Hors ligne'
-            self._update_sync_ui_progress(70, 'Étape 2/2 : Unification des catalogues', 'Synchronisation des magasins (Envoi)...')
+            for name_key, p in master_catalog_by_name.items():
+                bc = str(p.get('barcode', '')).strip()
+                if not bc:
+                    new_bc = self.generate_unique_ean13(existing_barcodes)
+                    p['barcode'] = new_bc
+            self._update_sync_ui_progress(70, 'Étape 3/3 : Synchronisation des magasins', 'Envoi des données unifiées...')
 
             def push_batch(idx):
-                if idx not in store_catalogs:
+                if idx not in store_catalogs_raw:
                     return (idx, 0)
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
-                local_catalog = store_catalogs[idx]
+                if not url:
+                    return (idx, 0)
+                local_prods = store_catalogs_raw[idx]
+                local_names = {str(p.get('name', '')).strip().lower() for p in local_prods}
+                local_barcodes = {str(p.get('barcode', '')).strip() for p in local_prods if str(p.get('barcode', '')).strip()}
                 items_to_add = []
-                for bc, master_p in master_catalog.items():
-                    if bc not in local_catalog:
-                        items_to_add.append({'name': str(master_p.get('name', '')), 'barcode': bc, 'description': str(master_p.get('description', '')), 'product_ref': str(master_p.get('product_ref') or master_p.get('ref') or ''), 'category': str(master_p.get('category', '')), 'cost': float(master_p.get('purchase_price', master_p.get('cost', 0)) or 0), 'price': float(master_p.get('price', 0) or 0), 'price_semi': float(master_p.get('price_semi', 0) or 0), 'price_wholesale': float(master_p.get('price_wholesale', 0) or 0), 'image_path': str(master_p.get('image', '')), 'unit': str(master_p.get('unit', '')), 'tva': float(master_p.get('tva', 0) or 0)})
+                for p_master in master_catalog_by_name.values():
+                    m_name = str(p_master.get('name', '')).strip()
+                    m_bc = str(p_master.get('barcode', '')).strip()
+                    if m_name.lower() not in local_names and m_bc not in local_barcodes:
+                        items_to_add.append({'name': m_name, 'barcode': m_bc, 'description': str(p_master.get('description', '')), 'product_ref': str(p_master.get('product_ref') or p_master.get('ref') or ''), 'category': str(p_master.get('category', '')), 'cost': float(p_master.get('purchase_price', p_master.get('cost', 0)) or 0), 'price': float(p_master.get('price', 0) or 0), 'price_semi': float(p_master.get('price_semi', 0) or 0), 'price_wholesale': float(p_master.get('price_wholesale', 0) or 0), 'image_path': '', 'unit': str(p_master.get('unit', '')), 'tva': float(p_master.get('tva', 0) or 0)})
                 added_count = 0
                 if items_to_add:
                     headers = {}
@@ -946,25 +997,23 @@ class StockApp(MDApp):
         self.sync_report_dialog = MDDialog(title='', type='custom', content_cls=content, radius=[20, 20, 20, 20], auto_dismiss=False)
         self.sync_report_dialog.open()
 
-    def submit_remote_transfer(self):
+    def submit_remote_transfer(self, paid_amount=0.0, payment_method=''):
+        if getattr(self, 'is_transaction_in_progress', False):
+            return
         if not self.cart and (not getattr(self, 'exchange_sent_cart', [])):
             self.notify('Les paniers sont vides !', 'error')
             return
-        self.notify("Préparation de l'opération...", 'info')
+        if getattr(self, 'pay_dialog', None):
+            self.pay_dialog.dismiss()
+            self.pay_dialog = None
+        self.is_transaction_in_progress = True
+        self.notify("Préparation de l'opération en cours...", 'info')
 
-        def build_items_payload(source_cart):
+        def build_items_payload(source_cart, is_remote=False):
             payload = []
             for item in source_cart:
-                prod_id = item['id']
-                purchase_price = 0
-                original_prod = next((p for p in self.all_products_raw if p['id'] == prod_id), None)
-                if original_prod:
-                    p_price = original_prod.get('purchase_price')
-                    if p_price is None:
-                        p_price = original_prod.get('price', 0)
-                    purchase_price = float(p_price or 0)
-                if purchase_price == 0:
-                    purchase_price = float(item.get('price', 0))
+                prod_id = item.get('remote_id') if is_remote and item.get('remote_id') else item['id']
+                purchase_price = float(item.get('price', 0))
                 payload.append({'id': prod_id, 'qty': float(item['qty']), 'price': purchase_price, 'tva': 0, 'name': item['name']})
             return payload
         local_payloads = []
@@ -979,25 +1028,30 @@ class StockApp(MDApp):
                 local_name = servers[active_idx].get('name', 'Magasin Local')
         creation_timestamp = str(datetime.now())
 
-        def build_payload(doc_type, notes, items, entity_name):
-            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': 0, 'method': ''}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name}
+        def build_payload(doc_type, notes, items, entity_name, loc='store'):
+            total_amt = sum((float(i['qty']) * float(i['price']) for i in items))
+            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(paid_amount), 'total': float(total_amt), 'method': payment_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc}
         if self.current_mode == 'remote_transfer_out':
-            items_out = build_items_payload(self.cart)
-            local_payloads.append(build_payload('BS', f'Envoi vers: {target_name}', items_out, target_name))
-            remote_payloads.append(build_payload('BA', f'Réception auto depuis: {local_name}', items_out, local_name))
+            items_local = build_items_payload(self.cart, is_remote=False)
+            items_remote = build_items_payload(self.cart, is_remote=True)
+            local_payloads.append(build_payload('BS', f'Envoi vers: {target_name}', items_local, target_name, self.selected_location))
+            remote_payloads.append(build_payload('BA', f'Réception auto depuis: {local_name}', items_remote, local_name, 'store'))
         elif self.current_mode == 'remote_transfer_in':
-            items_in = build_items_payload(self.cart)
-            local_payloads.append(build_payload('BA', f'Réception depuis: {target_name}', items_in, target_name))
-            remote_payloads.append(build_payload('BS', f'Envoi auto vers: {local_name}', items_in, local_name))
+            items_local = build_items_payload(self.cart, is_remote=False)
+            items_remote = build_items_payload(self.cart, is_remote=True)
+            local_payloads.append(build_payload('BA', f'Réception depuis: {target_name}', items_local, target_name, self.selected_location))
+            remote_payloads.append(build_payload('BS', f'Envoi auto vers: {local_name}', items_remote, local_name, 'store'))
         elif self.current_mode == 'remote_exchange':
-            items_out = build_items_payload(getattr(self, 'exchange_sent_cart', []))
-            items_in = build_items_payload(self.cart)
-            if items_out:
-                local_payloads.append(build_payload('BS', f'Echange Sortie vers: {target_name}', items_out, target_name))
-                remote_payloads.append(build_payload('BA', f'Echange Entrée auto depuis: {local_name}', items_out, local_name))
-            if items_in:
-                local_payloads.append(build_payload('BA', f'Echange Entrée depuis: {target_name}', items_in, target_name))
-                remote_payloads.append(build_payload('BS', f'Echange Sortie auto vers: {local_name}', items_in, local_name))
+            items_out_local = build_items_payload(getattr(self, 'exchange_sent_cart', []), is_remote=False)
+            items_out_remote = build_items_payload(getattr(self, 'exchange_sent_cart', []), is_remote=True)
+            items_in_local = build_items_payload(self.cart, is_remote=False)
+            items_in_remote = build_items_payload(self.cart, is_remote=True)
+            if items_out_local:
+                local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name}', items_out_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name}', items_out_remote, local_name, 'store'))
+            if items_in_local:
+                local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', items_in_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', items_in_remote, local_name, 'store'))
         remote_url = self.target_remote_url
         remote_pin = self.target_remote_server.get('pin', '')
         local_url = f'{self.api_base}/api/submit_order'
@@ -1011,7 +1065,9 @@ class StockApp(MDApp):
         def check_finish():
             self._success_count += 1
             if self._success_count == self._total_requests and (not self._has_error):
-                self.notify('Opération multi-magasins réussie ✅', 'success')
+                self.is_transaction_in_progress = False
+                self.notify('Opération multi-magasins réussie avec succès ✅', 'success')
+                self.show_success_checkmark_animation()
                 self.cart = []
                 self.exchange_sent_cart = []
                 self.update_cart_button()
@@ -1028,11 +1084,12 @@ class StockApp(MDApp):
             sync_store = JsonStore(store_path)
             key = f'remote_{int(time.time())}_{random.randint(100, 999)}'
             sync_store.put(key, url=remote_url, payload=r_payload, pin=remote_pin, target_name=self.target_remote_server.get('name'))
-            self.notify('Magasin distant hors ligne. Opération sauvegardée.', 'warning')
+            self.notify('Magasin distant hors ligne. Opération mise en attente.', 'warning')
             check_finish()
 
         def on_fail_local(req, err):
             self._has_error = True
+            self.is_transaction_in_progress = False
             self.notify(f'Erreur de création locale: {err}', 'error')
         for l_payload in local_payloads:
             UrlRequest(local_url, req_body=json.dumps(l_payload), req_headers={'Content-type': 'application/json'}, method='POST', on_success=lambda r, res: check_finish() if res.get('status') == 'success' else on_fail_local(r, res.get('message')), on_failure=on_fail_local, on_error=on_fail_local, timeout=5)
@@ -1259,7 +1316,7 @@ class StockApp(MDApp):
         if not self.is_server_reachable:
             self.notify("Vous devez d'abord être connecté à votre serveur principal.", 'error')
             return
-        from kivymd.uix.list import OneLineAvatarIconListItem
+        from kivymd.uix.list import TwoLineAvatarIconListItem
         data = self.store.get('servers_config')
         servers = data.get('list', [])
         active_index = data.get('active_index', 0)
@@ -1285,11 +1342,12 @@ class StockApp(MDApp):
         header_card.add_widget(MDIcon(icon='store-check', theme_text_color='Custom', text_color=theme_color, font_size='30sp', pos_hint={'center_y': 0.5}))
         header_card.add_widget(MDLabel(text=self.fix_text(current_name), bold=True, pos_hint={'center_y': 0.5}, theme_text_color='Custom', text_color=theme_color))
         content.add_widget(header_card)
-        scroll = MDScrollView(size_hint_y=None, height=dp(250))
+        scroll = MDScrollView(size_hint_y=None, height=dp(350))
         list_layout = MDList()
         self.ping_icons = {}
         self.remote_servers_status = {}
         self.remote_servers_urls = {}
+        self.remote_servers_debts = {}
         remote_servers = []
         for i, srv in enumerate(servers):
             if i == active_index:
@@ -1307,13 +1365,15 @@ class StockApp(MDApp):
                 else:
                     self.dialog = MDDialog(title='Connexion Impossible', text=f"Le magasin '{target.get('name')}' est actuellement HORS LIGNE.\nL'opération est impossible.", buttons=[MDFlatButton(text='OK', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
                     self.dialog.open()
-            item = OneLineAvatarIconListItem(text=self.fix_text(display_name), on_release=on_item_click)
+            item = TwoLineAvatarIconListItem(text=self.fix_text(display_name), secondary_text='Dettes: Recherche...', secondary_theme_text_color='Custom', secondary_text_color=(0.8, 0.1, 0.1, 1), on_release=on_item_click)
             icon = IconLeftWidget(icon='circle', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1))
             item.add_widget(icon)
             self.ping_icons[i] = icon
+            self.remote_servers_debts[i] = item
             self.remote_servers_status[i] = False
             list_layout.add_widget(item)
         if len(list_layout.children) == 0:
+            from kivymd.uix.list import OneLineListItem
             list_layout.add_widget(OneLineListItem(text=self.fix_text('Aucun autre magasin enregistré.')))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
@@ -1325,6 +1385,7 @@ class StockApp(MDApp):
     def _ping_remote_servers_async(self, remote_servers):
         import requests
         import re
+        from datetime import datetime
         for i, srv in remote_servers:
             local_ip = srv.get('local_ip', '').strip()
             ext_ip = srv.get('ext_ip', '').strip()
@@ -1352,13 +1413,38 @@ class StockApp(MDApp):
                         break
                 except:
                     continue
+            debt_val = 0.0
+            if is_online:
+                try:
+                    today_str = str(datetime.now().date())
+                    base_api_url = working_url.replace('/api/submit_order', '')
+                    stats_url = f'{base_api_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
+                    headers = {'Accept': 'application/json'}
+                    if srv.get('pin'):
+                        headers['X-Server-PIN'] = str(srv.get('pin'))
+                    res_stats = requests.get(stats_url, headers=headers, timeout=3)
+                    if res_stats.status_code == 200:
+                        data = res_stats.json().get('data', {})
+                        debt_val = float(data.get('supplier_debts', 0))
+                except Exception as e:
+                    pass
+            from kivy.clock import Clock
             if is_online:
                 self.remote_servers_status[i] = True
                 self.remote_servers_urls[i] = working_url
-                Clock.schedule_once(lambda dt, icon=self.ping_icons[i]: setattr(icon, 'text_color', (0, 0.8, 0, 1)))
+
+                def update_success(dt, icon=self.ping_icons[i], list_item=self.remote_servers_debts[i], d=debt_val):
+                    icon.text_color = (0, 0.8, 0, 1)
+                    list_item.secondary_text = 'Dettes: {:,.2f} DA'.format(d).replace(',', ' ').replace('.', ',')
+                Clock.schedule_once(update_success)
             else:
                 self.remote_servers_status[i] = False
-                Clock.schedule_once(lambda dt, icon=self.ping_icons[i]: setattr(icon, 'text_color', (0.8, 0, 0, 1)))
+
+                def update_fail(dt, icon=self.ping_icons[i], list_item=self.remote_servers_debts[i]):
+                    icon.text_color = (0.8, 0, 0, 1)
+                    list_item.secondary_text = 'Dettes: Hors Ligne'
+                    list_item.secondary_text_color = (0.5, 0.5, 0.5, 1)
+                Clock.schedule_once(update_fail)
 
     def start_remote_transfer_mode(self, target_server, working_url, mode_transfert):
         if hasattr(self, 'remote_transfer_dialog') and self.remote_transfer_dialog:
@@ -1414,16 +1500,19 @@ class StockApp(MDApp):
                 for lp in self.all_products_raw:
                     bc = str(lp.get('barcode', '')).strip()
                     if bc and bc in target_barcodes_map:
-                        filtered_local_products_out.append(lp)
                         rp = target_barcodes_map[bc]
-                        mapped_p = lp.copy()
-                        mapped_p['stock'] = rp.get('stock', 0)
+                        mapped_out = lp.copy()
+                        mapped_out['remote_id'] = rp.get('id')
+                        filtered_local_products_out.append(mapped_out)
+                        mapped_in = lp.copy()
+                        mapped_in['remote_id'] = rp.get('id')
+                        mapped_in['stock'] = rp.get('stock', 0)
                         if 'real_stock_store' in rp:
-                            mapped_p['real_stock_store'] = rp.get('real_stock_store', 0)
+                            mapped_in['real_stock_store'] = rp.get('real_stock_store', 0)
                         elif 'stock_store' in rp:
-                            mapped_p['stock_store'] = rp.get('stock_store', 0)
-                        mapped_p['stock_warehouse'] = rp.get('stock_warehouse', 0)
-                        filtered_local_products_in.append(mapped_p)
+                            mapped_in['stock_store'] = rp.get('stock_store', 0)
+                        mapped_in['stock_warehouse'] = rp.get('stock_warehouse', 0)
+                        filtered_local_products_in.append(mapped_in)
                 self.remote_filtered_products_out = filtered_local_products_out
                 self.remote_filtered_products_in = filtered_local_products_in
                 if mode_transfert == 'remote_transfer_in':
@@ -1437,7 +1526,7 @@ class StockApp(MDApp):
                         if not is_from_cache:
                             self.notify('Aucun produit commun (Code-barres manquant).', 'error')
                     else:
-                        msg = 'Chargement rapide (Cache)' if is_from_cache else 'Stock mis à jour avec succès !'
+                        msg = 'Chargement rapide (Cache)' if is_from_cache else 'Stock synchronisé avec le magasin cible !'
                         self.notify(f'{len(final_list)} Produits. {msg}', 'success')
                     self.prepare_products_for_rv(final_list)
                 update_ui()
@@ -2961,26 +3050,30 @@ class StockApp(MDApp):
             Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 2.0)
         if self.current_mode == 'request_stock':
             self.submit_stock_request()
-        elif self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 1:
-            if not self.cart:
-                self.notify("Le panier d'envoi est vide !", 'error')
-                return
-            self.exchange_sent_cart = list(self.cart)
-            self.cart = []
-            self.exchange_step = 2
-            self.update_cart_button()
-            self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
-            self.notify('Envoi validé. Sélectionnez ce que vous recevez.', 'info')
-            if hasattr(self, 'remote_filtered_products_in'):
-                self.current_product_list_source = self.remote_filtered_products_in
-                self.load_more_products(reset=True)
+        elif self.current_mode == 'remote_exchange':
+            if getattr(self, 'exchange_step', 1) == 1:
+                if not self.cart:
+                    self.notify("Le panier d'envoi est vide !", 'error')
+                    return
+                self.exchange_sent_cart = list(self.cart)
+                self.cart = []
+                self.exchange_step = 2
+                self.update_cart_button()
+                self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
+                self.notify('Envoi validé. Sélectionnez ce que vous recevez.', 'success')
+                if hasattr(self, 'remote_filtered_products_in'):
+                    self.current_product_list_source = self.remote_filtered_products_in
+                    self.load_more_products(reset=True)
 
-            def switch_to_products(dt):
-                self.sm.transition.direction = 'right'
-                self.sm.current = 'products'
-            Clock.schedule_once(switch_to_products, 0.1)
-        elif self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
-            self.submit_remote_transfer()
+                def switch_to_products(dt):
+                    self.sm.transition.direction = 'right'
+                    self.sm.current = 'products'
+                Clock.schedule_once(switch_to_products, 0.1)
+            else:
+                if not self.cart and (not getattr(self, 'exchange_sent_cart', [])):
+                    self.notify('Les paniers sont vides !', 'error')
+                    return
+                self.process_transaction(paid_amount=0.0, total_amount=0.0, method='')
         else:
             self.open_payment_dialog(instance)
 
@@ -4119,7 +4212,7 @@ class StockApp(MDApp):
         card_login.add_widget(self.password_field)
         card_login.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='18sp', size_hint_x=1, on_release=self.do_login))
         layout.add_widget(card_login)
-        footer_label = MDLabel(text='MagPro v7.6.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.02}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
+        footer_label = MDLabel(text='MagPro v7.7.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.02}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
         layout.add_widget(footer_label)
         screen.add_widget(layout)
         return screen
@@ -4196,7 +4289,7 @@ class StockApp(MDApp):
             is_active = original_idx == active_index
             display_name = self.fix_text(srv.get('name', 'Inconnu'))
             bg_color = (0.9, 0.95, 1, 1) if is_active else (0.98, 0.98, 0.98, 1)
-            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(65), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True, on_release=lambda x, idx=original_idx: self._on_store_selected(idx))
+            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(60), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True, on_release=lambda x, idx=original_idx: self._on_store_selected(idx))
             icon_status = MDIcon(icon='wifi-sync', theme_text_color='Hint', font_size='28sp', pos_hint={'center_y': 0.5})
             self.store_status_icons[original_idx] = icon_status
             self.store_online_flags[original_idx] = False
@@ -4221,6 +4314,7 @@ class StockApp(MDApp):
     def _check_stores_connection_bg(self, servers):
         import requests
         import re
+        from datetime import datetime
         for i, srv in enumerate(servers):
             local_ip = srv.get('local_ip', '').strip()
             ext_ip = srv.get('ext_ip', '').strip()
@@ -4238,19 +4332,35 @@ class StockApp(MDApp):
                 else:
                     urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
             is_online = False
+            working_url = ''
             for test_url in urls_to_test:
                 try:
                     res = requests.get(test_url, timeout=2.5)
                     if res.status_code == 200:
                         is_online = True
+                        working_url = test_url.replace('/api/ping', '')
                         break
                 except:
                     continue
+            debt_val = 0.0
+            if is_online and working_url:
+                try:
+                    today_str = str(datetime.now().date())
+                    stats_url = f'{working_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
+                    headers = {'Accept': 'application/json'}
+                    if srv.get('pin'):
+                        headers['X-Server-PIN'] = str(srv.get('pin'))
+                    res_stats = requests.get(stats_url, headers=headers, timeout=3)
+                    if res_stats.status_code == 200:
+                        data = res_stats.json().get('data', {})
+                        debt_val = float(data.get('supplier_debts', 0))
+                except Exception as e:
+                    pass
             from kivy.clock import Clock
-            Clock.schedule_once(lambda dt, idx=i, online=is_online: self._update_store_status_ui(idx, online), 0)
+            Clock.schedule_once(lambda dt, idx=i, online=is_online, debt=debt_val: self._update_store_status_ui(idx, online, debt), 0)
 
     @mainthread
-    def _update_store_status_ui(self, index, is_online):
+    def _update_store_status_ui(self, index, is_online, debt_amount=0.0):
         if not hasattr(self, 'dialog_select_magasin') or not self.dialog_select_magasin:
             return
         self.store_online_flags[index] = is_online
@@ -4521,7 +4631,7 @@ class StockApp(MDApp):
                 self.btn_loc_screen.disabled = False
                 self.btn_loc_screen.opacity = 1
         if hasattr(self, 'footer_card'):
-            if self.current_mode in ['request_stock', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            if self.current_mode == 'request_stock':
                 self.footer_card.height = dp(75)
                 if hasattr(self, 'lbl_total_title'):
                     self.lbl_total_title.opacity = 0
@@ -4556,11 +4666,11 @@ class StockApp(MDApp):
                 self.btn_ent_screen.md_bg_color = (0.4, 0.1, 0.8, 1)
             if hasattr(self, 'btn_validate_cart'):
                 if self.current_mode == 'remote_transfer_out':
-                    self.btn_validate_cart.text = 'ENVOYER'
+                    self.btn_validate_cart.text = "VALIDER L'ENVOI"
                 elif self.current_mode == 'remote_transfer_in':
-                    self.btn_validate_cart.text = 'RECEVOIR'
+                    self.btn_validate_cart.text = 'VALIDER LA RÉCEPTION'
                 elif getattr(self, 'exchange_step', 1) == 1:
-                    self.btn_validate_cart.text = 'SUIVANT (RÉCEPTION)'
+                    self.btn_validate_cart.text = 'SUIVANT (ÉTAPE 2)'
                 else:
                     self.btn_validate_cart.text = "VALIDER L'ÉCHANGE"
                 self.btn_validate_cart.md_bg_color = (0.4, 0.1, 0.8, 1)
@@ -4618,7 +4728,7 @@ class StockApp(MDApp):
                 line_ht = self._round_num(p * q)
                 line_ttc = self._round_num(line_ht * (1 + t_rate / 100.0))
                 q_disp = str(int(q)) if q.is_integer() else str(q)
-                if self.current_mode in ['transfer', 'request_stock', 'stock_in', 'stock_out', 'order_purchase', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+                if self.current_mode == 'request_stock':
                     details_text = f'Qté: {q_disp}'
                     d_color = [0.1, 0.4, 0.8, 1]
                 else:
@@ -4646,9 +4756,9 @@ class StockApp(MDApp):
                 return '0'
         is_invoice = self.current_mode in ['invoice_sale', 'invoice_purchase', 'proforma']
         is_request = self.current_mode == 'request_stock'
-        is_stock_only = self.current_mode in ['transfer', 'stock_in', 'stock_out', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']
+        hide_price_UI = self.current_mode in ['transfer', 'stock_in', 'stock_out']
         dialog_height = dp(600) if is_invoice else dp(520)
-        if is_request or is_stock_only:
+        if is_request or hide_price_UI:
             dialog_height = dp(350)
         content = MDBoxLayout(orientation='vertical', spacing='10dp', size_hint_y=None, height=dialog_height, padding=[0, '5dp', 0, 0])
         self.active_edit_target = 'qty'
@@ -4712,7 +4822,7 @@ class StockApp(MDApp):
             product_name = self.fix_text(raw_name)
             lbl_prod = MDLabel(text=product_name, halign='center', bold=True, font_style='Subtitle1', theme_text_color='Primary', adaptive_height=True)
             content.add_widget(lbl_prod)
-        if not is_stock_only and (not is_request):
+        if not hide_price_UI and (not is_request):
             price_val = item.get('price', 0)
             self.edit_price_card = MDCard(size_hint_y=None, height='70dp', radius=[10], padding=[10, 0, 10, 0], elevation=0)
             self.edit_price_field = NoMenuTextField(text=fmt_num(price_val), hint_text='Prix Unitaire (DA)', font_size='26sp', halign='center', mode='line', readonly=True, line_color_normal=(0, 0, 0, 0), line_color_focus=(0, 0, 0, 0), pos_hint={'center_y': 0.5})
@@ -4801,7 +4911,7 @@ class StockApp(MDApp):
                     tva = 0.0
             line_ht = self._round_num(q * p)
             total = self._round_num(line_ht * (1 + tva / 100.0))
-            if not is_stock_only and (not is_request):
+            if not hide_price_UI and (not is_request):
                 self.btn_save_edit.text = f'MODIFIER\n{total:.2f} DA'
             else:
                 self.btn_save_edit.text = 'MODIFIER'
@@ -4899,7 +5009,7 @@ class StockApp(MDApp):
                         item['price'] = float(p_text)
                     else:
                         item['price'] = new_price
-                elif not is_stock_only and (not is_request) and hasattr(self, 'edit_price_field'):
+                elif not hide_price_UI and (not is_request) and hasattr(self, 'edit_price_field'):
                     p_text = self.edit_price_field.text or '0'
                     new_p = float(p_text)
                     if new_p < 0:
@@ -5451,7 +5561,7 @@ class StockApp(MDApp):
                 return str(val_float)
             except:
                 return str(value)
-        is_transfer_or_stock = mode in ['transfer', 'request_stock', 'stock_in', 'stock_out', 'order_purchase', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']
+        hide_price_UI = mode in ['transfer', 'request_stock', 'stock_in', 'stock_out', 'order_purchase']
         is_sale_context = mode in ['sale', 'return_sale', 'invoice_sale', 'proforma']
         curr_price = 0
         if is_sale_context:
@@ -5498,10 +5608,10 @@ class StockApp(MDApp):
         if is_sale_context and product.get('has_promo', False):
             promo_label = MDLabel(text='PROMOTION ACTIVÉE', halign='center', theme_text_color='Custom', text_color=(1, 0, 0, 1), font_style='Caption', bold=True, adaptive_height=True)
             header_box.add_widget(promo_label)
-        dialog_height = dp(420) if is_transfer_or_stock else dp(500)
+        dialog_height = dp(420) if hide_price_UI else dp(500)
         content = MDBoxLayout(orientation='vertical', spacing='8dp', size_hint_y=None, height=dialog_height, padding=[0, '5dp', 0, 0])
         content.add_widget(header_box)
-        if not is_transfer_or_stock:
+        if not hide_price_UI:
             self.price_card = MDCard(size_hint_y=None, height='70dp', radius=[10], padding=[10, 0, 10, 0], elevation=0)
             self.price_field = NoMenuTextField(text=price_val_str, hint_text='Prix Unitaire (DA)', font_size='26sp', halign='center', mode='line', readonly=True, line_color_normal=(0, 0, 0, 0), line_color_focus=(0, 0, 0, 0), pos_hint={'center_y': 0.5})
             self.price_field.theme_text_color = 'Custom'
@@ -5547,7 +5657,7 @@ class StockApp(MDApp):
         content.add_widget(qty_row)
         self.btn_add = MDRaisedButton(text='AJOUTER', md_bg_color=(0, 0.7, 0, 1), text_color=(1, 1, 1, 1), size_hint_x=0.7, size_hint_y=1, font_size='18sp', elevation=3)
         temp_product = product.copy()
-        if is_sale_context and (not is_transfer_or_stock):
+        if is_sale_context:
             temp_product['price'] = float(curr_price or 0)
 
         def perform_add(x):
@@ -5556,12 +5666,13 @@ class StockApp(MDApp):
                 if not q_text:
                     q_text = '1'
                 req_qty = float(q_text)
-                if not is_transfer_or_stock and hasattr(self, 'price_field'):
+                if not hide_price_UI and hasattr(self, 'price_field'):
                     p_text = self.price_field.text
                     if not p_text:
                         p_text = '0'
                     p_val = float(p_text)
                     temp_product['price'] = p_val
+                    temp_product['is_user_edited_price'] = True
                 self.qty_field.text = str(req_qty)
                 self.add_to_cart(temp_product)
                 if self.dialog:
@@ -5571,7 +5682,7 @@ class StockApp(MDApp):
         self.btn_add.bind(on_release=perform_add)
 
         def update_button_text():
-            if is_transfer_or_stock:
+            if hide_price_UI:
                 self.btn_add.text = 'AJOUTER'
                 return
             try:
@@ -5605,7 +5716,7 @@ class StockApp(MDApp):
         btn_minus.bind(on_release=decrease)
 
         def get_active_field():
-            if is_transfer_or_stock:
+            if hide_price_UI:
                 return self.qty_field
             return self.price_field if self.active_input_target == 'price' else self.qty_field
 
@@ -5717,8 +5828,18 @@ class StockApp(MDApp):
             def scan_into_field(x):
                 self.target_scan_field = self.field_bar
                 self.open_barcode_scanner(None)
+
+            def generate_barcode_for_field(x):
+                existing = set()
+                if hasattr(self, 'all_products_raw'):
+                    for p in self.all_products_raw:
+                        bc = str(p.get('barcode', '')).strip()
+                        if bc:
+                            existing.add(bc)
+                new_bc = self.generate_unique_ean13(existing)
+                setattr(self.field_bar, 'text', new_bc)
             btn_scan_field = MDIconButton(icon='barcode-scan', on_release=scan_into_field)
-            btn_gen = MDIconButton(icon='refresh', on_release=lambda x: setattr(self.field_bar, 'text', '7' + ''.join([str(random.randint(0, 9)) for _ in range(12)])))
+            btn_gen = MDIconButton(icon='refresh', on_release=generate_barcode_for_field)
             box_bar.add_widget(self.field_bar)
             box_bar.add_widget(btn_scan_field)
             box_bar.add_widget(btn_gen)
@@ -5832,36 +5953,41 @@ class StockApp(MDApp):
             return
         is_sale_context = self.current_mode in ['sale', 'return_sale', 'invoice_sale', 'proforma']
         original_unit_price = 0.0
-        try:
-            if is_sale_context:
-                if product.get('has_promo', False):
-                    original_unit_price = float(product.get('price', 0))
-                else:
-                    curr_price = float(product.get('price', 0))
-                    if self.selected_entity:
-                        cat = str(self.selected_entity.get('category', ''))
-                        if cat in ['Gros', 'جملة']:
-                            curr_price = float(product.get('price_wholesale', 0) or 0)
-                        elif cat in ['Demi-Gros', 'نصف جملة']:
-                            curr_price = float(product.get('price_semi', 0) or 0)
-                        if curr_price == 0:
-                            curr_price = float(product.get('price', 0))
-                    original_unit_price = curr_price
-            else:
-                original_unit_price = float(product.get('purchase_price', product.get('price', 0)) or 0)
-        except:
-            original_unit_price = 0.0
-        final_price = original_unit_price
-        specials = product.get('special_prices', [])
-        if is_sale_context and specials and (not product.get('has_promo', False)):
-            specials.sort(key=lambda x: x['qty'], reverse=True)
-            for sp in specials:
-                if qty >= sp['qty']:
-                    if sp['type'] == 'TOTAL':
-                        final_price = float(sp['price']) / qty
+        if product.get('is_user_edited_price', False):
+            final_price = float(product.get('price', 0))
+            original_unit_price = final_price
+        else:
+            try:
+                if is_sale_context:
+                    if product.get('has_promo', False):
+                        original_unit_price = float(product.get('price', 0))
                     else:
-                        final_price = float(sp['price'])
-                    break
+                        curr_price = float(product.get('price', 0))
+                        if self.selected_entity:
+                            cat = str(self.selected_entity.get('category', ''))
+                            if cat in ['Gros', 'جملة']:
+                                curr_price = float(product.get('price_wholesale', 0) or 0)
+                            elif cat in ['Demi-Gros', 'نصف جملة']:
+                                curr_price = float(product.get('price_semi', 0) or 0)
+                            if curr_price == 0:
+                                curr_price = float(product.get('price', 0))
+                        original_unit_price = curr_price
+                else:
+                    original_unit_price = float(product.get('purchase_price', product.get('price', 0)) or 0)
+            except:
+                original_unit_price = 0.0
+            final_price = original_unit_price
+        specials = product.get('special_prices', [])
+        if not product.get('is_user_edited_price', False):
+            if is_sale_context and specials and (not product.get('has_promo', False)):
+                specials.sort(key=lambda x: x['qty'], reverse=True)
+                for sp in specials:
+                    if qty >= sp['qty']:
+                        if sp['type'] == 'TOTAL':
+                            final_price = float(sp['price']) / qty
+                        else:
+                            final_price = float(sp['price'])
+                        break
         if product.get('name') == 'Autre Article':
             count = sum((1 for item in self.cart if str(item.get('name')).startswith('Autre Article')))
             new_name = f'Autre Article {count + 1}'
@@ -5880,20 +6006,28 @@ class StockApp(MDApp):
             if item['id'] == product['id']:
                 new_total_qty = item['qty'] + qty
                 item['qty'] = new_total_qty
-                new_item_price = item.get('original_unit_price', final_price)
-                if is_sale_context and specials and (not product.get('has_promo', False)):
-                    for sp in specials:
-                        if new_total_qty >= sp['qty']:
-                            if sp['type'] == 'TOTAL':
-                                new_item_price = float(sp['price']) / new_total_qty
-                            else:
-                                new_item_price = float(sp['price'])
-                            break
-                item['price'] = new_item_price
+                if product.get('is_user_edited_price', False):
+                    item['price'] = final_price
+                else:
+                    new_item_price = item.get('original_unit_price', final_price)
+                    if is_sale_context and specials and (not product.get('has_promo', False)):
+                        for sp in specials:
+                            if new_total_qty >= sp['qty']:
+                                if sp['type'] == 'TOTAL':
+                                    new_item_price = float(sp['price']) / new_total_qty
+                                else:
+                                    new_item_price = float(sp['price'])
+                                break
+                    item['price'] = new_item_price
                 found = True
                 break
         if not found:
-            self.cart.append({'id': product['id'], 'name': product['name'], 'price': final_price, 'qty': qty, 'original_unit_price': original_unit_price, 'special_prices': specials, 'has_promo': product.get('has_promo', False)})
+            new_item = {'id': product['id'], 'name': product['name'], 'price': final_price, 'qty': qty, 'original_unit_price': original_unit_price, 'special_prices': specials, 'has_promo': product.get('has_promo', False)}
+            if product.get('product_ref'):
+                new_item['product_ref'] = product.get('product_ref')
+            if product.get('remote_id'):
+                new_item['remote_id'] = product.get('remote_id')
+            self.cart.append(new_item)
             prod_id = str(product.get('id'))
             if isinstance(self.current_product_list_source, list):
                 self.current_product_list_source = [item for item in self.current_product_list_source if str(item.get('id')) != prod_id]
@@ -6274,7 +6408,21 @@ class StockApp(MDApp):
         dialog_height = dp(640) if self.show_details else dp(580)
         content = MDBoxLayout(orientation='vertical', spacing='10dp', size_hint_y=None, height=dialog_height, padding=['10dp', '0dp', '10dp', '20dp'])
         header_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(10))
-        lbl_title = MDLabel(text='Paiement', font_style='H5', bold=True, theme_text_color='Primary', valign='center')
+        title_text = 'Paiement'
+        theme_col = (0, 0.7, 0, 1)
+        if self.current_mode == 'remote_transfer_out':
+            title_text = "Validation d'Envoi"
+            theme_col = (0.4, 0.1, 0.8, 1)
+        elif self.current_mode == 'remote_transfer_in':
+            title_text = 'Validation de Réception'
+            theme_col = (0.4, 0.1, 0.8, 1)
+        elif self.current_mode == 'remote_exchange':
+            theme_col = (0.4, 0.1, 0.8, 1)
+            if getattr(self, 'exchange_step', 1) == 1:
+                title_text = "Étape 1: Validation d'Envoi"
+            else:
+                title_text = 'Étape 2: Validation de Réception'
+        lbl_title = MDLabel(text=title_text, font_style='H5', bold=True, theme_text_color='Primary', valign='center')
         header_box.add_widget(lbl_title)
         if self.allow_payment_methods:
             self.btn_payment_method = MDRaisedButton(text=self.payment_methods[self.current_method_index]['label'], md_bg_color=(0.2, 0.2, 0.2, 1), elevation=2, pos_hint={'center_y': 0.5}, on_release=self._cycle_payment_method)
@@ -6300,7 +6448,7 @@ class StockApp(MDApp):
         else:
             self.lbl_timbre = MDLabel()
         total_box = MDBoxLayout(orientation='vertical', spacing=0)
-        total_lbl_title = MDLabel(text='NET À PAYER', halign='center', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20))
+        total_lbl_title = MDLabel(text='MONTANT TOTAL', halign='center', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20))
         self.lbl_final_total = MDLabel(text='', halign='center', font_style='H4', bold=True, theme_text_color='Primary')
         total_box.add_widget(total_lbl_title)
         total_box.add_widget(self.lbl_final_total)
@@ -6310,7 +6458,7 @@ class StockApp(MDApp):
             default_val = f'{float(self.editing_payment_amount or 0):.2f}'
         except:
             default_val = '0.00'
-        self.txt_paid = MDTextField(text=default_val, hint_text='Montant Versé (DA)', font_size='40sp', halign='center', readonly=True, size_hint_y=None, height=dp(80), mode='fill', line_color_focus=(0, 0, 0, 0))
+        self.txt_paid = MDTextField(text=default_val, hint_text='Montant Versé / Payé (DA)', font_size='40sp', halign='center', readonly=True, size_hint_y=None, height=dp(80), mode='fill', line_color_focus=(0, 0, 0, 0))
         self.txt_paid.get_value = lambda: self.txt_paid.text
         content.add_widget(self.txt_paid)
         self.lbl_rest = MDLabel(text='', halign='center', theme_text_color='Custom', font_style='H6', bold=True, size_hint_y=None, height=dp(30))
@@ -6348,9 +6496,12 @@ class StockApp(MDApp):
             grid.add_widget(btn)
         content.add_widget(grid)
         content.add_widget(MDBoxLayout(size_hint_y=None, height='15dp'))
+        btn_valid_text = 'VALIDER'
+        if self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 1:
+            btn_valid_text = 'SUIVANT (RÉCEPTION)'
         buttons_box = MDBoxLayout(orientation='horizontal', spacing='10dp', size_hint_y=None, height='55dp')
         btn_cancel = MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), size_hint_x=0.3, on_release=lambda x: self.pay_dialog.dismiss())
-        btn_valid = MDRaisedButton(text='VALIDER', md_bg_color=(0, 0.7, 0, 1), text_color=(1, 1, 1, 1), size_hint_x=0.7, size_hint_y=1, font_size='20sp', elevation=2, on_release=lambda x: self.finalize_submission(self.current_final_total))
+        btn_valid = MDRaisedButton(text=btn_valid_text, md_bg_color=theme_col, text_color=(1, 1, 1, 1), size_hint_x=0.7, size_hint_y=1, font_size='18sp', elevation=2, on_release=lambda x: self.finalize_submission(self.current_final_total))
         buttons_box.add_widget(btn_cancel)
         buttons_box.add_widget(btn_valid)
         content.add_widget(buttons_box)
@@ -6400,6 +6551,26 @@ class StockApp(MDApp):
         if getattr(self, 'is_transaction_in_progress', False):
             return
         self.is_transaction_in_progress = True
+        if self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 1:
+            self.is_transaction_in_progress = False
+            if getattr(self, 'pay_dialog', None):
+                self.pay_dialog.dismiss()
+                self.pay_dialog = None
+            self.exchange_sent_cart = list(self.cart)
+            self.cart = []
+            self.exchange_step = 2
+            self.update_cart_button()
+            self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
+            self.notify('Envoi validé. Sélectionnez ce que vous recevez.', 'info')
+            if hasattr(self, 'remote_filtered_products_in'):
+                self.current_product_list_source = self.remote_filtered_products_in
+                self.load_more_products(reset=True)
+
+            def switch_to_products(dt):
+                self.sm.transition.direction = 'right'
+                self.sm.current = 'products'
+            Clock.schedule_once(switch_to_products, 0.1)
+            return
         if getattr(self, 'pay_dialog', None):
             self.pay_dialog.dismiss()
             self.pay_dialog = None
@@ -6417,12 +6588,12 @@ class StockApp(MDApp):
                 paid_amount = float(self.txt_paid.get_value()) if self.txt_paid.get_value() else 0
             except:
                 paid_amount = 0
-            if paid_amount < total_amount:
+            if paid_amount < total_amount and self.current_mode not in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
                 self.is_transaction_in_progress = False
                 remaining = total_amount - paid_amount
                 self.show_credit_warning(paid_amount, total_amount, remaining)
                 return
-            if paid_amount > total_amount and self.current_mode not in ['return_sale', 'return_purchase']:
+            if paid_amount > total_amount and self.current_mode not in ['return_sale', 'return_purchase', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
                 self.is_transaction_in_progress = False
                 excess = paid_amount - total_amount
                 self.show_overpayment_dialog(paid_amount, total_amount, excess)
@@ -6470,6 +6641,9 @@ class StockApp(MDApp):
         self.debt_dialog.open()
 
     def process_transaction(self, paid_amount, total_amount, method=None):
+        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            self.submit_remote_transfer(paid_amount, method if method else '')
+            return
         if getattr(self, 'is_transaction_in_progress', False):
             return
         if self.current_mode == 'transfer':
@@ -7993,6 +8167,8 @@ class StockApp(MDApp):
                 new_item = {'id': product['id'], 'name': product['name'], 'price': final_price, 'qty': qty_to_add, 'original_unit_price': final_price, 'tva': 0, 'has_promo': False}
                 if product.get('product_ref'):
                     new_item['product_ref'] = product.get('product_ref')
+                if product.get('remote_id'):
+                    new_item['remote_id'] = product.get('remote_id')
                 self.cart.append(new_item)
             self.update_cart_button()
         except Exception as e:
