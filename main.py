@@ -1316,22 +1316,21 @@ class StockApp(MDApp):
         if not self.is_server_reachable:
             self.notify("Vous devez d'abord être connecté à votre serveur principal.", 'error')
             return
-        from kivymd.uix.list import TwoLineAvatarIconListItem
         data = self.store.get('servers_config')
         servers = data.get('list', [])
         active_index = data.get('active_index', 0)
         if mode_transfert == 'remote_transfer_out':
-            dialog_title = 'Envoyer vers (Magasin de destination)'
+            dialog_title = 'Envoyer vers (Destination)'
             theme_color = (0.8, 0.1, 0.1, 1)
             bg_color = (1, 0.9, 0.9, 1)
             icon_name = 'package-up'
         elif mode_transfert == 'remote_transfer_in':
-            dialog_title = 'Recevoir de (Magasin source)'
+            dialog_title = 'Recevoir de (Source)'
             theme_color = (0.1, 0.6, 0.2, 1)
             bg_color = (0.9, 1, 0.92, 1)
             icon_name = 'package-down'
         else:
-            dialog_title = "Échanger avec (Magasin d'échange)"
+            dialog_title = 'Échanger avec (Magasin)'
             theme_color = (0.9, 0.5, 0, 1)
             bg_color = (1, 0.95, 0.85, 1)
             icon_name = 'sync-circle'
@@ -1342,12 +1341,12 @@ class StockApp(MDApp):
         header_card.add_widget(MDIcon(icon='store-check', theme_text_color='Custom', text_color=theme_color, font_size='30sp', pos_hint={'center_y': 0.5}))
         header_card.add_widget(MDLabel(text=self.fix_text(current_name), bold=True, pos_hint={'center_y': 0.5}, theme_text_color='Custom', text_color=theme_color))
         content.add_widget(header_card)
-        scroll = MDScrollView(size_hint_y=None, height=dp(350))
-        list_layout = MDList()
+        scroll = MDScrollView(size_hint_y=None, height=dp(400))
+        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(4), padding=[0, dp(5), 0, dp(5)])
         self.ping_icons = {}
         self.remote_servers_status = {}
         self.remote_servers_urls = {}
-        self.remote_servers_debts = {}
+        self.remote_servers_debts_labels = {}
         remote_servers = []
         for i, srv in enumerate(servers):
             if i == active_index:
@@ -1356,6 +1355,7 @@ class StockApp(MDApp):
         remote_servers.sort(key=lambda item: item[1].get('name', '').lower())
         for i, srv in remote_servers:
             display_name = srv.get('name', 'Magasin Inconnu')
+            card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(55), padding=[dp(5), 0, dp(10), 0], spacing=dp(5), radius=[5], elevation=1, md_bg_color=(0.98, 0.98, 0.98, 1), ripple_behavior=True)
 
             def on_item_click(x, target=srv, srv_index=i):
                 is_online = self.remote_servers_status.get(srv_index, False)
@@ -1365,19 +1365,22 @@ class StockApp(MDApp):
                 else:
                     self.dialog = MDDialog(title='Connexion Impossible', text=f"Le magasin '{target.get('name')}' est actuellement HORS LIGNE.\nL'opération est impossible.", buttons=[MDFlatButton(text='OK', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
                     self.dialog.open()
-            item = TwoLineAvatarIconListItem(text=self.fix_text(display_name), secondary_text='Dettes: Recherche...', secondary_theme_text_color='Custom', secondary_text_color=(0.8, 0.1, 0.1, 1), on_release=on_item_click)
-            icon = IconLeftWidget(icon='circle', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1))
-            item.add_widget(icon)
+            card.bind(on_release=on_item_click)
+            icon = MDIcon(icon='circle', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(30))
             self.ping_icons[i] = icon
-            self.remote_servers_debts[i] = item
+            card.add_widget(icon)
+            lbl_name = MDLabel(text=self.fix_text(display_name), bold=True, font_style='Subtitle2', theme_text_color='Primary', pos_hint={'center_y': 0.5}, size_hint_x=0.45)
+            card.add_widget(lbl_name)
+            lbl_debt = MDLabel(text='Recherche...', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0.8, 0.1, 0.1, 1), halign='right', pos_hint={'center_y': 0.5}, size_hint_x=0.55)
+            self.remote_servers_debts_labels[i] = lbl_debt
+            card.add_widget(lbl_debt)
             self.remote_servers_status[i] = False
-            list_layout.add_widget(item)
+            list_layout.add_widget(card)
         if len(list_layout.children) == 0:
-            from kivymd.uix.list import OneLineListItem
-            list_layout.add_widget(OneLineListItem(text=self.fix_text('Aucun autre magasin enregistré.')))
+            list_layout.add_widget(MDLabel(text=self.fix_text('Aucun autre magasin enregistré.'), halign='center', theme_text_color='Hint'))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-        self.remote_transfer_dialog = MDDialog(title=self.fix_text(dialog_title), type='custom', content_cls=content, buttons=[MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=theme_color, on_release=lambda x: self.remote_transfer_dialog.dismiss())])
+        self.remote_transfer_dialog = MDDialog(title=self.fix_text(dialog_title), type='custom', content_cls=content, size_hint=(0.98, None), radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=theme_color, on_release=lambda x: self.remote_transfer_dialog.dismiss())])
         self.remote_transfer_dialog.open()
         import threading
         threading.Thread(target=self._ping_remote_servers_async, args=(remote_servers,), daemon=True).start()
@@ -1406,7 +1409,7 @@ class StockApp(MDApp):
             working_url = ''
             for test_url in urls_to_test:
                 try:
-                    res = requests.get(test_url, timeout=3)
+                    res = requests.get(test_url, timeout=1.5)
                     if res.status_code == 200:
                         is_online = True
                         working_url = test_url.replace('/api/ping', '/api/submit_order')
@@ -1422,7 +1425,7 @@ class StockApp(MDApp):
                     headers = {'Accept': 'application/json'}
                     if srv.get('pin'):
                         headers['X-Server-PIN'] = str(srv.get('pin'))
-                    res_stats = requests.get(stats_url, headers=headers, timeout=3)
+                    res_stats = requests.get(stats_url, headers=headers, timeout=2.0)
                     if res_stats.status_code == 200:
                         data = res_stats.json().get('data', {})
                         debt_val = float(data.get('supplier_debts', 0))
@@ -1433,17 +1436,17 @@ class StockApp(MDApp):
                 self.remote_servers_status[i] = True
                 self.remote_servers_urls[i] = working_url
 
-                def update_success(dt, icon=self.ping_icons[i], list_item=self.remote_servers_debts[i], d=debt_val):
+                def update_success(dt, icon=self.ping_icons[i], lbl=self.remote_servers_debts_labels[i], d=debt_val):
                     icon.text_color = (0, 0.8, 0, 1)
-                    list_item.secondary_text = 'Dettes: {:,.2f} DA'.format(d).replace(',', ' ').replace('.', ',')
+                    lbl.text = '{:,.2f} DA'.format(d).replace(',', ' ').replace('.', ',')
                 Clock.schedule_once(update_success)
             else:
                 self.remote_servers_status[i] = False
 
-                def update_fail(dt, icon=self.ping_icons[i], list_item=self.remote_servers_debts[i]):
+                def update_fail(dt, icon=self.ping_icons[i], lbl=self.remote_servers_debts_labels[i]):
                     icon.text_color = (0.8, 0, 0, 1)
-                    list_item.secondary_text = 'Dettes: Hors Ligne'
-                    list_item.secondary_text_color = (0.5, 0.5, 0.5, 1)
+                    lbl.text = 'Hors Ligne'
+                    lbl.text_color = (0.5, 0.5, 0.5, 1)
                 Clock.schedule_once(update_fail)
 
     def start_remote_transfer_mode(self, target_server, working_url, mode_transfert):
@@ -3802,7 +3805,7 @@ class StockApp(MDApp):
             self.ping_session.headers.update({'User-Agent': 'MagProMobile/1.0'})
         start_time = time.time()
         try:
-            res = self.ping_session.get(url, timeout=3)
+            res = self.ping_session.get(url, timeout=1.5)
             if res.status_code == 200:
                 ping_val = int((time.time() - start_time) * 1000)
                 self._finalize_ping_ui(True, ping_val, confirmed_ip)
@@ -4079,7 +4082,7 @@ class StockApp(MDApp):
         self.notify('Connexion...', 'info')
         url = f'{self.api_base}/api/login'
         body = json.dumps({'username': self.username_field.get_value(), 'password': self.password_field.get_value()})
-        UrlRequest(url, req_body=body, req_headers={'Content-type': 'application/json'}, method='POST', on_success=self.login_success, on_failure=self.login_fail, on_error=self.login_error, timeout=4)
+        UrlRequest(url, req_body=body, req_headers={'Content-type': 'application/json'}, method='POST', on_success=self.login_success, on_failure=self.login_fail, on_error=self.login_error, timeout=2.5)
 
     def login_success(self, req, res):
         if res.get('status') == 'success':
@@ -4314,7 +4317,6 @@ class StockApp(MDApp):
     def _check_stores_connection_bg(self, servers):
         import requests
         import re
-        from datetime import datetime
         for i, srv in enumerate(servers):
             local_ip = srv.get('local_ip', '').strip()
             ext_ip = srv.get('ext_ip', '').strip()
@@ -4332,35 +4334,19 @@ class StockApp(MDApp):
                 else:
                     urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
             is_online = False
-            working_url = ''
             for test_url in urls_to_test:
                 try:
-                    res = requests.get(test_url, timeout=2.5)
+                    res = requests.get(test_url, timeout=1.0)
                     if res.status_code == 200:
                         is_online = True
-                        working_url = test_url.replace('/api/ping', '')
                         break
                 except:
                     continue
-            debt_val = 0.0
-            if is_online and working_url:
-                try:
-                    today_str = str(datetime.now().date())
-                    stats_url = f'{working_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
-                    headers = {'Accept': 'application/json'}
-                    if srv.get('pin'):
-                        headers['X-Server-PIN'] = str(srv.get('pin'))
-                    res_stats = requests.get(stats_url, headers=headers, timeout=3)
-                    if res_stats.status_code == 200:
-                        data = res_stats.json().get('data', {})
-                        debt_val = float(data.get('supplier_debts', 0))
-                except Exception as e:
-                    pass
             from kivy.clock import Clock
-            Clock.schedule_once(lambda dt, idx=i, online=is_online, debt=debt_val: self._update_store_status_ui(idx, online, debt), 0)
+            Clock.schedule_once(lambda dt, idx=i, online=is_online: self._update_store_status_ui(idx, online), 0)
 
     @mainthread
-    def _update_store_status_ui(self, index, is_online, debt_amount=0.0):
+    def _update_store_status_ui(self, index, is_online):
         if not hasattr(self, 'dialog_select_magasin') or not self.dialog_select_magasin:
             return
         self.store_online_flags[index] = is_online
