@@ -956,11 +956,12 @@ class StockApp(MDApp):
         from kivymd.uix.card import MDCard
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.label import MDLabel
-        from kivymd.uix.button import MDFillRoundFlatButton
+        from kivymd.uix.button import MDRaisedButton
         from kivymd.uix.scrollview import MDScrollView
         from kivymd.uix.label import MDIcon
         from kivymd.uix.dialog import MDDialog
         from kivy.metrics import dp
+        from kivy.core.window import Window
         self.is_syncing_articles = False
         if hasattr(self, 'loading_sync_dialog') and self.loading_sync_dialog:
             try:
@@ -974,9 +975,10 @@ class StockApp(MDApp):
                 self.sync_report_dialog = None
             except:
                 pass
-        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(520), spacing=dp(10), padding=[0, dp(10), 0, 0])
+        dialog_height = min(Window.height * 0.8, dp(650))
+        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dialog_height, spacing=dp(15), padding=[dp(5), dp(10), dp(5), dp(5)])
         total_added_global = sum([int(v.get('added', 0)) for k, v in report_data.items() if report_data])
-        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(90), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if total_added_global > 0 else (0.95, 0.95, 0.95, 1))
+        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(100), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if total_added_global > 0 else (0.95, 0.95, 0.95, 1))
         icon_color = (0, 0.5, 0.9, 1) if total_added_global > 0 else (0.4, 0.4, 0.4, 1)
         header_card.add_widget(MDIcon(icon='cloud-check' if total_added_global > 0 else 'cloud-sync', theme_text_color='Custom', text_color=icon_color, font_size='45sp', pos_hint={'center_y': 0.5}))
         header_text = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
@@ -986,7 +988,7 @@ class StockApp(MDApp):
         content.add_widget(header_card)
         content.add_widget(MDLabel(text='Détails par magasin :', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20)))
         scroll = MDScrollView()
-        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[dp(5), dp(5), dp(5), dp(15)])
+        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[0, dp(5), 0, dp(15)])
         if not report_data:
             list_layout.add_widget(MDLabel(text='Aucune donnée disponible.', halign='center', theme_text_color='Hint'))
         sorted_report = sorted(report_data.items(), key=lambda x: str(x[1].get('name', '')).lower())
@@ -996,8 +998,8 @@ class StockApp(MDApp):
             s_total = int(r_data.get('total', 0))
             s_status = str(r_data.get('status', 'Erreur'))
             is_offline = 'Hors ligne' in s_status or 'Erreur' in s_status
-            store_card = MDCard(orientation='horizontal', padding=[dp(15), dp(10)], spacing=dp(10), size_hint_y=None, height=dp(70), radius=[10], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
-            store_card.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='28sp', pos_hint={'center_y': 0.5}))
+            store_card = MDCard(orientation='horizontal', padding=[dp(15), dp(10)], spacing=dp(10), size_hint_y=None, height=dp(75), radius=[12], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
+            store_card.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='30sp', pos_hint={'center_y': 0.5}))
             info_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(0))
             info_box.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle2', theme_text_color='Primary'))
             if is_offline:
@@ -1008,15 +1010,17 @@ class StockApp(MDApp):
             if not is_offline:
                 badge_color = (0, 0.7, 0.2, 1) if s_added > 0 else (0.6, 0.6, 0.6, 1)
                 badge_bg = (0.9, 1, 0.9, 1) if s_added > 0 else (0.95, 0.95, 0.95, 1)
-                badge = MDCard(size_hint=(None, None), size=(dp(60), dp(30)), radius=[15], md_bg_color=badge_bg, elevation=0, pos_hint={'center_y': 0.5})
-                badge.add_widget(MDLabel(text=f'+{s_added}', halign='center', bold=True, theme_text_color='Custom', text_color=badge_color, font_size='14sp'))
+                badge = MDCard(size_hint=(None, None), size=(dp(65), dp(35)), radius=[15], md_bg_color=badge_bg, elevation=0, pos_hint={'center_y': 0.5})
+                badge.add_widget(MDLabel(text=f'+{s_added}', halign='center', bold=True, theme_text_color='Custom', text_color=badge_color, font_size='15sp'))
                 store_card.add_widget(badge)
             list_layout.add_widget(store_card)
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-        btn_close = MDFillRoundFlatButton(text='TERMINER', font_size='16sp', size_hint_x=1, height=dp(50), md_bg_color=(0.1, 0.1, 0.1, 1), on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
-        content.add_widget(btn_close)
-        self.sync_report_dialog = MDDialog(title='', type='custom', content_cls=content, radius=[20, 20, 20, 20], auto_dismiss=False)
+        btn_box = MDBoxLayout(size_hint_y=None, height=dp(55), padding=[0, dp(5), 0, 0])
+        btn_close = MDRaisedButton(text='TERMINER', font_size='18sp', size_hint_x=1, size_hint_y=1, md_bg_color=(0.1, 0.1, 0.1, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
+        btn_box.add_widget(btn_close)
+        content.add_widget(btn_box)
+        self.sync_report_dialog = MDDialog(title='', type='custom', content_cls=content, size_hint=(0.95, None), radius=[20, 20, 20, 20], auto_dismiss=False)
         self.sync_report_dialog.open()
 
     def submit_remote_transfer(self, paid_amount=0.0, payment_method=''):
@@ -1693,6 +1697,7 @@ class StockApp(MDApp):
         self.current_mode = mode_transfert
         self.cart = []
         self.selected_entity = {'id': None, 'name': target_server.get('name', 'Magasin Distant')}
+        self.is_remote_live_data = False
         title_map = {'remote_transfer_out': f"Envoi vers: {target_server.get('name')}", 'remote_transfer_in': f"Réception de: {target_server.get('name')}", 'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}"}
         self.prod_toolbar.title = self.fix_text(title_map.get(mode_transfert, 'Opération'))
         self.theme_cls.primary_palette = 'DeepPurple'
@@ -1761,8 +1766,12 @@ class StockApp(MDApp):
                     if not final_list:
                         if not is_from_cache:
                             self.notify('Aucun produit commun (Code-barres manquant).', 'error')
+                    elif is_from_cache:
+                        msg = 'Lecture (Cache) : Ajout au panier bloqué.'
+                        self.notify(f'{len(final_list)} Produits. {msg}', 'warning')
                     else:
-                        msg = 'Chargement rapide (Cache)' if is_from_cache else 'Stock synchronisé avec le magasin cible !'
+                        self.is_remote_live_data = True
+                        msg = 'Stock synchronisé avec le magasin cible !'
                         self.notify(f'{len(final_list)} Produits. {msg}', 'success')
                     self.prepare_products_for_rv(final_list)
                 update_ui()
@@ -1822,7 +1831,7 @@ class StockApp(MDApp):
 
                     @mainthread
                     def show_offline_msg():
-                        self.notify('Réseau faible. Utilisation des données locales.', 'warning')
+                        self.notify('Réseau faible. Modification impossible avec le cache.', 'error')
                     show_offline_msg()
             except Exception as e:
                 pass
@@ -5426,9 +5435,6 @@ class StockApp(MDApp):
     def open_edit_server_dialog(self, index):
         if hasattr(self, 'dialog') and getattr(self, 'dialog', None):
             self.dialog.dismiss()
-        import re
-        from kivy.clock import Clock
-        from kivy.animation import Animation
         is_new = index is None
         srv_name = ''
         srv_local = '192.168.1.100'
@@ -5447,31 +5453,12 @@ class StockApp(MDApp):
         self.field_srv_name = SmartTextField(text=srv_name, hint_text='Nom du Magasin', mode='rectangle', icon_right='store')
         self.field_srv_local = MDTextField(text=srv_local, hint_text='IP Locale (Wifi)', mode='rectangle', icon_right='router-wireless')
         self.field_srv_ext = MDTextField(text=srv_ext, hint_text='IP Externe (Internet / Cloudflare)', mode='rectangle', icon_right='web')
-        initial_has_letters = bool(srv_ext.strip() and re.search('[a-zA-Z]', srv_ext))
-        initial_height = dp(65) if initial_has_letters else 0
-        initial_opacity = 1 if initial_has_letters else 0
-        self.pin_container = MDBoxLayout(orientation='vertical', size_hint_y=None, height=initial_height, opacity=initial_opacity)
-        self.field_srv_pin = MDTextField(text=srv_pin, hint_text='Code PIN du Serveur', mode='rectangle', icon_right='lock-outline', password=True)
-        self.field_srv_pin.disabled = not initial_has_letters
-        self.pin_container.add_widget(self.field_srv_pin)
+        self.field_srv_pin = MDTextField(text=srv_pin, hint_text='Code PIN du Serveur (Si requis)', mode='rectangle', icon_right='lock-outline', password=True)
         content.add_widget(self.field_srv_name)
         content.add_widget(self.field_srv_local)
         content.add_widget(self.field_srv_ext)
-        content.add_widget(self.pin_container)
+        content.add_widget(self.field_srv_pin)
         scroll.add_widget(content)
-
-        def check_ext_ip(instance, text):
-            has_letters = bool(text.strip() and re.search('[a-zA-Z]', text))
-            if has_letters and self.pin_container.height == 0:
-                self.field_srv_pin.disabled = False
-                anim = Animation(height=dp(65), opacity=1, d=0.25)
-                anim.start(self.pin_container)
-            elif not has_letters and self.pin_container.height > 0:
-                self.field_srv_pin.disabled = True
-                self.field_srv_pin.text = ''
-                anim = Animation(height=0, opacity=0, d=0.2)
-                anim.start(self.pin_container)
-        self.field_srv_ext.bind(text=check_ext_ip)
         buttons = [MDFlatButton(text='ANNULER', on_release=lambda x: [self.dialog_edit_srv.dismiss(), self.open_ip_settings()])]
         if not is_new:
             buttons.append(MDRaisedButton(text='SUPPRIMER', md_bg_color=(0.8, 0.2, 0.2, 1), on_release=lambda x: self.delete_server_config(index)))
@@ -5479,6 +5466,7 @@ class StockApp(MDApp):
         title_text = 'Nouveau Magasin' if is_new else f'Détails : {self.fix_text(srv_name)}'
         self.dialog_edit_srv = MDDialog(title=title_text, type='custom', content_cls=scroll, radius=[15, 15, 15, 15], buttons=buttons)
         self.dialog_edit_srv.open()
+        from kivy.clock import Clock
         Clock.schedule_once(lambda dt: setattr(self.field_srv_name, 'focus', True), 0.3)
 
     def save_server_config(self, index):
@@ -5797,6 +5785,11 @@ class StockApp(MDApp):
             enter_products_screen()
 
     def open_add_to_cart_dialog(self, product, mode):
+        if mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            if not getattr(self, 'is_remote_live_data', False):
+                self.play_sound('error')
+                self.notify('Action bloquée ! Attente de la synchronisation en direct.', 'error')
+                return
         if mode == 'manage_products':
             self.show_manage_product_dialog(product)
             return
@@ -8286,6 +8279,11 @@ class StockApp(MDApp):
     def process_continuous_scan(self, code):
         if not hasattr(self, 'scan_dialog') or not self.scan_dialog.parent:
             return
+        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            if not getattr(self, 'is_remote_live_data', False):
+                self.play_sound('error')
+                self.notify('Action bloquée ! Attente de la synchronisation.', 'error')
+                return
         if hasattr(self, 'target_scan_field') and self.target_scan_field:
             self.target_scan_field.text = code
             self.play_sound('success')
