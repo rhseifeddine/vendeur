@@ -1007,7 +1007,6 @@ class StockApp(MDApp):
             self.pay_dialog.dismiss()
             self.pay_dialog = None
         self.is_transaction_in_progress = True
-        self.notify("Préparation de l'opération en cours...", 'info')
 
         def build_items_payload(source_cart, is_remote=False):
             payload = []
@@ -1026,11 +1025,18 @@ class StockApp(MDApp):
             servers = data.get('list', [])
             if active_idx < len(servers):
                 local_name = servers[active_idx].get('name', 'Magasin Local')
+        from datetime import datetime
         creation_timestamp = str(datetime.now())
 
-        def build_payload(doc_type, notes, items, entity_name, loc='store'):
+        def build_payload(doc_type, notes, items, entity_name, loc='store', is_exchange=False):
             total_amt = sum((float(i['qty']) * float(i['price']) for i in items))
-            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(paid_amount), 'total': float(total_amt), 'method': payment_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc}
+            if is_exchange:
+                final_paid = total_amt
+                final_method = 'Espèce'
+            else:
+                final_paid = paid_amount
+                final_method = payment_method if payment_method else 'Espèce'
+            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(final_paid), 'total': float(total_amt), 'method': final_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc}
         if self.current_mode == 'remote_transfer_out':
             items_local = build_items_payload(self.cart, is_remote=False)
             items_remote = build_items_payload(self.cart, is_remote=True)
@@ -1047,57 +1053,183 @@ class StockApp(MDApp):
             items_in_local = build_items_payload(self.cart, is_remote=False)
             items_in_remote = build_items_payload(self.cart, is_remote=True)
             if items_out_local:
-                local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name}', items_out_local, target_name, self.selected_location))
-                remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name}', items_out_remote, local_name, 'store'))
+                local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name}', items_out_local, target_name, self.selected_location, True))
+                remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name}', items_out_remote, local_name, 'store', True))
             if items_in_local:
-                local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', items_in_local, target_name, self.selected_location))
-                remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', items_in_remote, local_name, 'store'))
+                local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', items_in_local, target_name, self.selected_location, True))
+                remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', items_in_remote, local_name, 'store', True))
         remote_url = self.target_remote_url
         remote_pin = self.target_remote_server.get('pin', '')
         local_url = f'{self.api_base}/api/submit_order'
-        req_headers = {'Content-type': 'application/json'}
+        req_headers_remote = {'Content-type': 'application/json'}
         if remote_pin:
-            req_headers['X-Server-PIN'] = remote_pin
-        self._success_count = 0
-        self._total_requests = len(local_payloads) + len(remote_payloads)
-        self._has_error = False
+            req_headers_remote['X-Server-PIN'] = remote_pin
+        req_headers_local = {'Content-type': 'application/json'}
+        self.sync_engine_state = {'reqs': [], 'current_index': 0}
+        for lp in local_payloads:
+            self.sync_engine_state['reqs'].append({'type': 'local', 'url': local_url, 'payload': lp, 'headers': req_headers_local, 'server_id': None, 'doc_type': lp['doc_type']})
+        for rp in remote_payloads:
+            self.sync_engine_state['reqs'].append({'type': 'remote', 'url': remote_url, 'payload': rp, 'headers': req_headers_remote, 'server_id': None, 'doc_type': rp['doc_type']})
+        if not self.sync_engine_state['reqs']:
+            self.is_transaction_in_progress = False
+            return
+        self.open_multi_sync_modal()
 
-        def check_finish():
-            self._success_count += 1
-            if self._success_count == self._total_requests and (not self._has_error):
+    def open_multi_sync_modal(self):
+        from kivy.uix.modalview import ModalView
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.spinner import MDSpinner
+        from kivymd.uix.label import MDLabel, MDIcon
+        from kivymd.uix.button import MDRaisedButton, MDFlatButton
+        from kivymd.uix.card import MDCard
+        from kivy.metrics import dp
+        from kivy.clock import Clock
+        self.sync_modal = ModalView(size_hint=(0.85, None), height=dp(280), auto_dismiss=False, background_color=(0, 0, 0, 0.7))
+        self.sync_modal_card = MDCard(orientation='vertical', padding=dp(20), spacing=dp(20), radius=[15], md_bg_color=(1, 1, 1, 1))
+        self.sync_modal_title = MDLabel(text='Synchronisation en cours...', halign='center', font_style='H6', bold=True, theme_text_color='Primary', size_hint_y=None, height=dp(30))
+        self.sync_modal_card.add_widget(self.sync_modal_title)
+        from kivymd.uix.floatlayout import MDFloatLayout
+        self.sync_center_box = MDFloatLayout(size_hint_y=None, height=dp(100))
+        self.sync_spinner = MDSpinner(size_hint=(None, None), size=(dp(60), dp(60)), pos_hint={'center_x': 0.5, 'center_y': 0.5}, active=True, palette=[[0.1, 0.5, 0.8, 1]])
+        self.sync_icon = MDIcon(icon='check-circle', font_size='80sp', pos_hint={'center_x': 0.5, 'center_y': 0.5}, theme_text_color='Custom', text_color=(0, 0.7, 0, 1), opacity=0)
+        self.sync_center_box.add_widget(self.sync_spinner)
+        self.sync_center_box.add_widget(self.sync_icon)
+        self.sync_modal_card.add_widget(self.sync_center_box)
+        self.sync_status_label = MDLabel(text='Préparation...', halign='center', font_style='Body1', theme_text_color='Secondary', size_hint_y=None, height=dp(20))
+        self.sync_modal_card.add_widget(self.sync_status_label)
+        self.sync_btn_box = MDBoxLayout(orientation='horizontal', spacing=dp(10), size_hint_y=None, height=0, opacity=0)
+        self.sync_btn_cancel = MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=(0.8, 0, 0, 1), size_hint_x=0.5, on_release=self._on_sync_cancel_clicked)
+        self.sync_btn_retry = MDRaisedButton(text='RÉESSAYER', md_bg_color=(0.1, 0.5, 0.8, 1), size_hint_x=0.5, on_release=self._on_sync_retry_clicked)
+        self.sync_btn_box.add_widget(self.sync_btn_cancel)
+        self.sync_btn_box.add_widget(self.sync_btn_retry)
+        self.sync_modal_card.add_widget(self.sync_btn_box)
+        self.sync_modal.add_widget(self.sync_modal_card)
+        self.sync_modal.open()
+        Clock.schedule_once(lambda dt: self._process_next_sync_request(), 0.5)
+
+    def _process_next_sync_request(self):
+        import json
+        from kivy.clock import Clock
+        from kivy.metrics import dp
+        if not hasattr(self, 'sync_engine_state') or not self.sync_modal:
+            return
+        reqs = self.sync_engine_state['reqs']
+        idx = self.sync_engine_state['current_index']
+        if idx >= len(reqs):
+            self.sync_spinner.active = False
+            self.sync_spinner.opacity = 0
+            self.sync_icon.icon = 'check-circle'
+            self.sync_icon.text_color = (0, 0.7, 0, 1)
+            from kivy.animation import Animation
+            anim = Animation(opacity=1, font_size=dp(100), d=0.4, t='out_back')
+            anim.start(self.sync_icon)
+            self.sync_modal_title.text = 'Opération Réussie !'
+            self.sync_status_label.text = 'Toutes les données sont synchronisées.'
+
+            def finish_all(dt):
+                self.sync_modal.dismiss()
                 self.is_transaction_in_progress = False
                 self.notify('Opération multi-magasins réussie avec succès ✅', 'success')
-                self.show_success_checkmark_animation()
                 self.cart = []
                 self.exchange_sent_cart = []
                 self.update_cart_button()
                 self.go_back()
+            Clock.schedule_once(finish_all, 1.5)
+            return
+        current_req = reqs[idx]
+        total_steps = len(reqs)
+        current_step = idx + 1
+        target_str = 'Magasin Local' if current_req['type'] == 'local' else 'Magasin Distant'
+        self.sync_spinner.active = True
+        self.sync_spinner.opacity = 1
+        self.sync_icon.opacity = 0
+        self.sync_btn_box.height = 0
+        self.sync_btn_box.opacity = 0
+        self.sync_modal_title.text = f'Étape {current_step}/{total_steps}'
+        self.sync_status_label.text = f'Envoi vers {target_str}...'
+        self.sync_status_label.theme_text_color = 'Secondary'
 
-        def handle_remote_offline(req=None, err=None, r_payload=None):
-            if not r_payload:
-                return
-            from kivy.storage.jsonstore import JsonStore
-            import os
-            import time
-            import random
-            store_path = os.path.join(self.user_data_dir, 'remote_sync.json')
-            sync_store = JsonStore(store_path)
-            key = f'remote_{int(time.time())}_{random.randint(100, 999)}'
-            sync_store.put(key, url=remote_url, payload=r_payload, pin=remote_pin, target_name=self.target_remote_server.get('name'))
-            self.notify('Magasin distant hors ligne. Opération mise en attente.', 'warning')
-            check_finish()
+        def on_success(request, result):
+            if isinstance(result, dict) and result.get('status') == 'success':
+                current_req['server_id'] = result.get('server_id')
+                self.sync_engine_state['current_index'] += 1
+                self._process_next_sync_request()
+            else:
+                on_fail(request, result)
 
-        def on_fail_local(req, err):
-            self._has_error = True
-            self.is_transaction_in_progress = False
-            self.notify(f'Erreur de création locale: {err}', 'error')
-        for l_payload in local_payloads:
-            UrlRequest(local_url, req_body=json.dumps(l_payload), req_headers={'Content-type': 'application/json'}, method='POST', on_success=lambda r, res: check_finish() if res.get('status') == 'success' else on_fail_local(r, res.get('message')), on_failure=on_fail_local, on_error=on_fail_local, timeout=5)
-        for r_payload in remote_payloads:
-            UrlRequest(remote_url, req_body=json.dumps(r_payload), req_headers=req_headers, method='POST', on_success=lambda r, res, p=r_payload: check_finish() if res.get('status') == 'success' else handle_remote_offline(r, res.get('message'), p), on_failure=lambda r, err, p=r_payload: handle_remote_offline(r, err, p), on_error=lambda r, err, p=r_payload: handle_remote_offline(r, err, p), timeout=5)
+        def on_fail(request, error):
+            self.sync_spinner.active = False
+            self.sync_spinner.opacity = 0
+            self.sync_icon.icon = 'alert-circle'
+            self.sync_icon.text_color = (0.8, 0.1, 0.1, 1)
+            self.sync_icon.font_size = '70sp'
+            self.sync_icon.opacity = 1
+            self.sync_modal_title.text = 'Erreur'
+            real_error = 'Vérifiez la connexion internet.'
+            if isinstance(error, dict) and 'message' in error:
+                real_error = error.get('message')
+            elif hasattr(request, 'error') and request.error:
+                real_error = str(request.error)[:60]
+            self.sync_status_label.text = f'Échec vers {target_str}.\n{real_error}'
+            self.sync_status_label.theme_text_color = 'Error'
+            self.sync_btn_box.height = dp(50)
+            self.sync_btn_box.opacity = 1
+        UrlRequest(current_req['url'], req_body=json.dumps(current_req['payload']), req_headers=current_req['headers'], method='POST', on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=10)
+
+    def _on_sync_retry_clicked(self, instance):
+        self._process_next_sync_request()
+
+    def _on_sync_cancel_clicked(self, instance):
+        self.sync_btn_cancel.disabled = True
+        self.sync_btn_retry.disabled = True
+        self.sync_modal_title.text = 'Annulation en cours...'
+        self.sync_status_label.text = 'Nettoyage des opérations partielles...'
+        self.sync_spinner.active = True
+        self.sync_spinner.opacity = 1
+        self.sync_icon.opacity = 0
+        reqs = self.sync_engine_state['reqs']
+        completed_reqs = [r for r in reqs if r.get('server_id') is not None]
+        if not completed_reqs:
+            self._finish_rollback()
+            return
+        self.rollback_count = len(completed_reqs)
+        import json
+
+        def check_rollback_done(req, res):
+            self.rollback_count -= 1
+            if self.rollback_count <= 0:
+                self._finish_rollback()
+        for r in completed_reqs:
+            base_url = r['url'].split('/api/')[0]
+            del_url = f'{base_url}/api/delete_transaction'
+            is_tr = r['doc_type'] == 'TR'
+            payload = {'server_id': r['server_id'], 'is_transfer': is_tr}
+            UrlRequest(del_url, req_body=json.dumps(payload), req_headers=r['headers'], method='POST', on_success=check_rollback_done, on_failure=check_rollback_done, on_error=check_rollback_done, timeout=5)
+
+    def _finish_rollback(self):
+        from kivy.clock import Clock
+        self.sync_modal.dismiss()
+        self.is_transaction_in_progress = False
+        self.notify('Opération complètement annulée.', 'warning')
 
     def on_pause(self):
+        self.force_reset_app_state()
         return True
+
+    def on_resume(self):
+        self.force_reset_app_state()
+        if platform == 'android':
+            self.start_gps_service()
+        return True
+
+    def on_stop(self):
+        self.force_reset_app_state()
+        if platform == 'android' and hasattr(self, 'location_manager') and self.location_manager:
+            try:
+                if hasattr(self, 'location_listener') and self.location_listener:
+                    self.location_manager.removeUpdates(self.location_listener)
+            except:
+                pass
 
     def fix_text(self, text):
         if not text or not isinstance(text, str):
@@ -1323,17 +1455,21 @@ class StockApp(MDApp):
             dialog_title = 'Envoyer vers (Destination)'
             theme_color = (0.8, 0.1, 0.1, 1)
             bg_color = (1, 0.9, 0.9, 1)
-            icon_name = 'package-up'
         elif mode_transfert == 'remote_transfer_in':
             dialog_title = 'Recevoir de (Source)'
             theme_color = (0.1, 0.6, 0.2, 1)
             bg_color = (0.9, 1, 0.92, 1)
-            icon_name = 'package-down'
         else:
             dialog_title = 'Échanger avec (Magasin)'
             theme_color = (0.9, 0.5, 0, 1)
             bg_color = (1, 0.95, 0.85, 1)
-            icon_name = 'sync-circle'
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.card import MDCard
+        from kivymd.uix.label import MDIcon, MDLabel
+        from kivymd.uix.scrollview import MDScrollView
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton
+        from kivy.metrics import dp
         content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(10))
         current_server = servers[active_index] if active_index < len(servers) else {}
         current_name = current_server.get('name', 'Magasin Inconnu')
@@ -1385,69 +1521,87 @@ class StockApp(MDApp):
         import threading
         threading.Thread(target=self._ping_remote_servers_async, args=(remote_servers,), daemon=True).start()
 
-    def _ping_remote_servers_async(self, remote_servers):
+    def _ping_single_remote_server_worker(self, item):
         import requests
         import re
+        import urllib3
         from datetime import datetime
-        for i, srv in remote_servers:
-            local_ip = srv.get('local_ip', '').strip()
-            ext_ip = srv.get('ext_ip', '').strip()
-            urls_to_test = []
-            for ip in [ext_ip, local_ip]:
-                if not ip:
-                    continue
-                if 'http' in ip:
-                    urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
-                elif re.search('[a-zA-Z]', ip):
-                    urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
-                    urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
-                elif ':' in ip:
-                    urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
-                else:
-                    urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
-            is_online = False
-            working_url = ''
-            for test_url in urls_to_test:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        i, srv = item
+        local_ip = srv.get('local_ip', '').strip()
+        ext_ip = srv.get('ext_ip', '').strip()
+        urls_to_test = []
+        for ip in [ext_ip, local_ip]:
+            if not ip:
+                continue
+            if 'http' in ip:
+                urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
+            elif re.search('[a-zA-Z]', ip):
+                urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
+                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+            elif ':' in ip:
+                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+            else:
+                urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
+        is_online = False
+        working_url = ''
+        headers = {'Accept': 'application/json'}
+        if srv.get('pin'):
+            headers['X-Server-PIN'] = str(srv.get('pin'))
+        for test_url in urls_to_test:
+            try:
+                res = requests.get(test_url, headers=headers, timeout=1.5, verify=False)
+                if res.status_code == 200:
+                    is_online = True
+                    working_url = test_url.replace('/api/ping', '/api/submit_order')
+                    break
+            except:
+                continue
+        debt_val = 0.0
+        if is_online:
+            try:
+                today_str = str(datetime.now().date())
+                base_api_url = working_url.replace('/api/submit_order', '')
+                stats_url = f'{base_api_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
+                res_stats = requests.get(stats_url, headers=headers, timeout=2.0, verify=False)
+                if res_stats.status_code == 200:
+                    data = res_stats.json().get('data', {})
+                    debt_val = float(data.get('supplier_debts', 0))
+            except Exception as e:
+                pass
+        return (i, is_online, working_url, debt_val)
+
+    def _ping_remote_servers_async(self, remote_servers):
+        import concurrent.futures
+        from kivy.clock import Clock
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(self._ping_single_remote_server_worker, item): item for item in remote_servers}
+            for future in concurrent.futures.as_completed(futures):
                 try:
-                    res = requests.get(test_url, timeout=1.5)
-                    if res.status_code == 200:
-                        is_online = True
-                        working_url = test_url.replace('/api/ping', '/api/submit_order')
-                        break
-                except:
-                    continue
-            debt_val = 0.0
-            if is_online:
-                try:
-                    today_str = str(datetime.now().date())
-                    base_api_url = working_url.replace('/api/submit_order', '')
-                    stats_url = f'{base_api_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
-                    headers = {'Accept': 'application/json'}
-                    if srv.get('pin'):
-                        headers['X-Server-PIN'] = str(srv.get('pin'))
-                    res_stats = requests.get(stats_url, headers=headers, timeout=2.0)
-                    if res_stats.status_code == 200:
-                        data = res_stats.json().get('data', {})
-                        debt_val = float(data.get('supplier_debts', 0))
+                    i, is_online, working_url, debt_val = future.result()
+                    Clock.schedule_once(lambda dt, idx=i, online=is_online, url=working_url, debt=debt_val: self._update_remote_server_ui(idx, online, url, debt), 0)
                 except Exception as e:
                     pass
-            from kivy.clock import Clock
-            if is_online:
-                self.remote_servers_status[i] = True
-                self.remote_servers_urls[i] = working_url
 
-                def update_success(dt, icon=self.ping_icons[i], lbl=self.remote_servers_debts_labels[i], d=debt_val):
-                    icon.text_color = (0, 0.8, 0, 1)
-                    lbl.text = '{:,.2f} DA'.format(d).replace(',', ' ').replace('.', ',')
-                Clock.schedule_once(update_success)
-            else:
-                self.remote_servers_status[i] = False
-
-                def update_fail(dt, icon=self.ping_icons[i], lbl=self.remote_servers_debts_labels[i]):
-                    icon.text_color = (0.8, 0, 0, 1)
-                    lbl.text = 'Hors Ligne'
-                    lbl.text_color = (0.5, 0.5, 0.5, 1)
-                Clock.schedule_once(update_fail)
+    @mainthread
+    def _update_remote_server_ui(self, index, is_online, working_url, debt_val):
+        if not hasattr(self, 'remote_transfer_dialog') or not self.remote_transfer_dialog:
+            return
+        icon = self.ping_icons.get(index)
+        lbl = self.remote_servers_debts_labels.get(index)
+        if not icon or not lbl:
+            return
+        self.remote_servers_status[index] = is_online
+        if is_online:
+            self.remote_servers_urls[index] = working_url
+            icon.text_color = (0, 0.8, 0, 1)
+            lbl.text = '{:,.2f} DA'.format(debt_val).replace(',', ' ').replace('.', ',')
+            lbl.text_color = (0.8, 0.1, 0.1, 1)
+        else:
+            self.remote_servers_urls[index] = ''
+            icon.text_color = (0.8, 0, 0, 1)
+            lbl.text = 'Hors Ligne'
+            lbl.text_color = (0.5, 0.5, 0.5, 1)
 
     def start_remote_transfer_mode(self, target_server, working_url, mode_transfert):
         if hasattr(self, 'remote_transfer_dialog') and self.remote_transfer_dialog:
@@ -3041,16 +3195,18 @@ class StockApp(MDApp):
             self.submit_simple_payment_offline(data)
             release_lock_and_finish()
 
-    def validate_cart_action(self, instance):
+    def validate_cart_action(self, instance=None):
         if getattr(self, 'is_transaction_in_progress', False):
             return
+        import time
+        from kivy.clock import Clock
         current_time = time.time()
-        if current_time - getattr(self, '_last_cart_validate_time', 0) < 1.5:
+        if current_time - getattr(self, '_last_cart_validate_time', 0) < 1.0:
             return
         self._last_cart_validate_time = current_time
         if instance:
             instance.disabled = True
-            Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 2.0)
+            Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 1.0)
         if self.current_mode == 'request_stock':
             self.submit_stock_request()
         elif self.current_mode == 'remote_exchange':
@@ -3076,7 +3232,9 @@ class StockApp(MDApp):
                 if not self.cart and (not getattr(self, 'exchange_sent_cart', [])):
                     self.notify('Les paniers sont vides !', 'error')
                     return
-                self.process_transaction(paid_amount=0.0, total_amount=0.0, method='')
+                self.submit_remote_transfer()
+        elif self.current_mode in ['remote_transfer_out', 'remote_transfer_in']:
+            self.open_payment_dialog(instance)
         else:
             self.open_payment_dialog(instance)
 
@@ -4280,8 +4438,15 @@ class StockApp(MDApp):
         active_index = data.get('active_index', 0)
         if len(servers) <= 1:
             return
+        from kivy.metrics import dp
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.scrollview import MDScrollView
+        from kivymd.uix.card import MDCard
+        from kivymd.uix.label import MDIcon, MDLabel
+        from kivymd.uix.button import MDFlatButton
+        from kivymd.uix.dialog import MDDialog
         content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(10))
-        scroll = MDScrollView(size_hint_y=None, height=dp(300))
+        scroll = MDScrollView(size_hint_y=None, height=dp(450))
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
         self.store_status_icons = {}
         self.store_status_labels = {}
@@ -4292,7 +4457,8 @@ class StockApp(MDApp):
             is_active = original_idx == active_index
             display_name = self.fix_text(srv.get('name', 'Inconnu'))
             bg_color = (0.9, 0.95, 1, 1) if is_active else (0.98, 0.98, 0.98, 1)
-            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(60), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True, on_release=lambda x, idx=original_idx: self._on_store_selected(idx))
+            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(60), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True)
+            card.bind(on_release=lambda x, idx=original_idx: self._on_store_selected(idx))
             icon_status = MDIcon(icon='wifi-sync', theme_text_color='Hint', font_size='28sp', pos_hint={'center_y': 0.5})
             self.store_status_icons[original_idx] = icon_status
             self.store_online_flags[original_idx] = False
@@ -4309,41 +4475,56 @@ class StockApp(MDApp):
             list_layout.add_widget(card)
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-        self.dialog_select_magasin = MDDialog(title='Choisir un Magasin', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.dialog_select_magasin.dismiss())])
+        self.dialog_select_magasin = MDDialog(title='Choisir un Magasin', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.dialog_select_magasin.dismiss())], size_hint=(0.95, None))
         self.dialog_select_magasin.open()
         import threading
         threading.Thread(target=self._check_stores_connection_bg, args=(servers,), daemon=True).start()
 
-    def _check_stores_connection_bg(self, servers):
+    def _ping_store_worker(self, item):
         import requests
         import re
-        for i, srv in enumerate(servers):
-            local_ip = srv.get('local_ip', '').strip()
-            ext_ip = srv.get('ext_ip', '').strip()
-            urls_to_test = []
-            for ip in [ext_ip, local_ip]:
-                if not ip:
-                    continue
-                if 'http' in ip:
-                    urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
-                elif re.search('[a-zA-Z]', ip):
-                    urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
-                    urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
-                elif ':' in ip:
-                    urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
-                else:
-                    urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
-            is_online = False
-            for test_url in urls_to_test:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        index, srv = item
+        local_ip = str(srv.get('local_ip', '')).strip()
+        ext_ip = str(srv.get('ext_ip', '')).strip()
+        urls_to_test = []
+        for ip in [ext_ip, local_ip]:
+            if not ip:
+                continue
+            if 'http' in ip:
+                urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
+            elif re.search('[a-zA-Z]', ip):
+                urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
+                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+            elif ':' in ip:
+                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+            else:
+                urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
+        is_online = False
+        headers = {'Accept': 'application/json'}
+        for test_url in urls_to_test:
+            try:
+                res = requests.get(test_url, headers=headers, timeout=1.5, verify=False)
+                if res.status_code == 200:
+                    is_online = True
+                    break
+            except:
+                continue
+        return (index, is_online)
+
+    def _check_stores_connection_bg(self, servers):
+        import concurrent.futures
+        from kivy.clock import Clock
+        indexed_servers = list(enumerate(servers))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(self._ping_store_worker, item): item for item in indexed_servers}
+            for future in concurrent.futures.as_completed(futures):
                 try:
-                    res = requests.get(test_url, timeout=1.0)
-                    if res.status_code == 200:
-                        is_online = True
-                        break
-                except:
-                    continue
-            from kivy.clock import Clock
-            Clock.schedule_once(lambda dt, idx=i, online=is_online: self._update_store_status_ui(idx, online), 0)
+                    index, is_online = future.result()
+                    Clock.schedule_once(lambda dt, idx=index, online=is_online: self._update_store_status_ui(idx, online), 0)
+                except Exception as e:
+                    pass
 
     @mainthread
     def _update_store_status_ui(self, index, is_online):
@@ -4352,25 +4533,27 @@ class StockApp(MDApp):
         self.store_online_flags[index] = is_online
         icon_widget = self.store_status_icons.get(index)
         lbl_widget = self.store_status_labels.get(index)
-        if is_online:
-            icon_widget.icon = 'wifi'
-            icon_widget.text_color = (0, 0.7, 0, 1)
-            icon_widget.theme_text_color = 'Custom'
-            lbl_widget.text = 'En ligne'
-            lbl_widget.theme_text_color = 'Custom'
-            lbl_widget.text_color = (0, 0.7, 0, 1)
-        else:
-            icon_widget.icon = 'wifi-off'
-            icon_widget.text_color = (0.8, 0, 0, 1)
-            icon_widget.theme_text_color = 'Custom'
-            lbl_widget.text = 'Hors ligne'
-            lbl_widget.theme_text_color = 'Error'
+        if icon_widget and lbl_widget:
+            if is_online:
+                icon_widget.icon = 'wifi'
+                icon_widget.text_color = (0, 0.7, 0, 1)
+                icon_widget.theme_text_color = 'Custom'
+                lbl_widget.text = 'En ligne'
+                lbl_widget.theme_text_color = 'Custom'
+                lbl_widget.text_color = (0, 0.7, 0, 1)
+            else:
+                icon_widget.icon = 'wifi-off'
+                icon_widget.text_color = (0.8, 0, 0, 1)
+                icon_widget.theme_text_color = 'Custom'
+                lbl_widget.text = 'Hors ligne'
+                lbl_widget.theme_text_color = 'Error'
 
     def _on_store_selected(self, index):
         data = self.store.get('servers_config')
         active_index = data.get('active_index', 0)
         if index == active_index:
-            self.dialog_select_magasin.dismiss()
+            if hasattr(self, 'dialog_select_magasin') and self.dialog_select_magasin:
+                self.dialog_select_magasin.dismiss()
             return
         is_online = self.store_online_flags.get(index, False)
         self.set_active_magasin(index)
@@ -4387,7 +4570,6 @@ class StockApp(MDApp):
         self.apply_active_server()
         if hasattr(self, 'dialog_select_magasin') and self.dialog_select_magasin:
             self.dialog_select_magasin.dismiss()
-        self.notify('Magasin sélectionné avec succès', 'success')
 
     def open_delivery_map(self):
         if not self.is_server_reachable:
@@ -5033,7 +5215,7 @@ class StockApp(MDApp):
         if hasattr(self, 'dialog') and getattr(self, 'dialog', None):
             self.dialog.dismiss()
         content_list = MDBoxLayout(orientation='vertical', spacing='12dp', adaptive_height=True, padding=[0, dp(10), 0, dp(20)])
-        scroll_view = MDScrollView(size_hint_y=None, height=dp(550))
+        scroll_view = MDScrollView(size_hint_y=None, height=dp(650))
 
         def add_section(text):
             lbl = MDLabel(text=text, theme_text_color='Custom', text_color=self.theme_cls.primary_color, font_style='Subtitle2', bold=True, size_hint_y=None, height=dp(30), padding=(dp(10), dp(5)))
@@ -5105,9 +5287,12 @@ class StockApp(MDApp):
             servers = data.get('list', [])
             active_idx = data.get('active_index', 0)
             stores_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(10), dp(0), dp(10), dp(10)])
-            for i, srv in enumerate(servers):
-                is_active = i == active_idx
-                card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(60), padding=[dp(15), dp(5), dp(15), dp(5)], spacing=dp(15), radius=[12], md_bg_color=(0.9, 0.97, 0.9, 1) if is_active else (0.95, 0.95, 0.95, 1), elevation=1, ripple_behavior=True, on_release=lambda x, idx=i: self.open_edit_server_dialog(idx))
+            indexed_servers_settings = list(enumerate(servers))
+            indexed_servers_settings.sort(key=lambda item: str(item[1].get('name', '')).lower())
+            for original_idx, srv in indexed_servers_settings:
+                is_active = original_idx == active_idx
+                card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(60), padding=[dp(15), dp(5), dp(15), dp(5)], spacing=dp(15), radius=[12], md_bg_color=(0.9, 0.97, 0.9, 1) if is_active else (0.95, 0.95, 0.95, 1), elevation=1, ripple_behavior=True)
+                card.bind(on_release=lambda x, idx=original_idx: self.open_edit_server_dialog(idx))
                 icon_name = 'check-circle' if is_active else 'store-outline'
                 icon_color = (0, 0.6, 0.2, 1) if is_active else (0.5, 0.5, 0.5, 1)
                 card.add_widget(MDIcon(icon=icon_name, theme_text_color='Custom', text_color=icon_color, font_size='26sp', pos_hint={'center_y': 0.5}))
@@ -6019,12 +6204,10 @@ class StockApp(MDApp):
                 self.current_product_list_source = [item for item in self.current_product_list_source if str(item.get('id')) != prod_id]
             if isinstance(self.all_products_raw, list):
                 self.all_products_raw = [item for item in self.all_products_raw if str(item.get('id')) != prod_id]
-            elif isinstance(self.all_products_raw, dict):
-                keys_to_delete = [k for k, v in self.all_products_raw.items() if isinstance(v, dict) and str(v.get('id')) == prod_id]
-                for k in keys_to_delete:
-                    del self.all_products_raw[k]
-            if hasattr(self, 'remote_filtered_products') and isinstance(self.remote_filtered_products, list):
-                self.remote_filtered_products = [item for item in self.remote_filtered_products if str(item.get('id')) != prod_id]
+            if hasattr(self, 'remote_filtered_products_out') and isinstance(self.remote_filtered_products_out, list):
+                self.remote_filtered_products_out = [item for item in self.remote_filtered_products_out if str(item.get('id')) != prod_id]
+            if hasattr(self, 'remote_filtered_products_in') and isinstance(self.remote_filtered_products_in, list):
+                self.remote_filtered_products_in = [item for item in self.remote_filtered_products_in if str(item.get('id')) != prod_id]
             self.load_more_products(reset=True)
         if hasattr(self, 'dialog') and self.dialog:
             self.dialog.dismiss()
@@ -6073,9 +6256,12 @@ class StockApp(MDApp):
                 if isinstance(self.current_product_list_source, list):
                     if not any((str(p.get('id')) == product_id for p in self.current_product_list_source)):
                         self.current_product_list_source.append(restored_product)
-                if hasattr(self, 'remote_filtered_products') and isinstance(self.remote_filtered_products, list):
-                    if not any((str(p.get('id')) == product_id for p in self.remote_filtered_products)):
-                        self.remote_filtered_products.append(restored_product)
+                if hasattr(self, 'remote_filtered_products_out') and isinstance(self.remote_filtered_products_out, list):
+                    if not any((str(p.get('id')) == product_id for p in self.remote_filtered_products_out)):
+                        self.remote_filtered_products_out.append(restored_product)
+                if hasattr(self, 'remote_filtered_products_in') and isinstance(self.remote_filtered_products_in, list):
+                    if not any((str(p.get('id')) == product_id for p in self.remote_filtered_products_in)):
+                        self.remote_filtered_products_in.append(restored_product)
                 if self.sm.current == 'products':
                     self.load_more_products(reset=True)
         self.refresh_cart_screen_items()
@@ -6530,44 +6716,26 @@ class StockApp(MDApp):
             self.lbl_rest.text_color = (0, 0.6, 0, 1)
 
     def finalize_submission(self, total_amount):
+        import time
+        from kivy.clock import Clock
         current_time = time.time()
-        if current_time - getattr(self, '_last_click_time_pay', 0) < 2.0:
+        if current_time - getattr(self, '_last_click_time_pay', 0) < 1.0:
             return
         self._last_click_time_pay = current_time
         if getattr(self, 'is_transaction_in_progress', False):
             return
         self.is_transaction_in_progress = True
-        if self.current_mode == 'remote_exchange' and getattr(self, 'exchange_step', 1) == 1:
-            self.is_transaction_in_progress = False
-            if getattr(self, 'pay_dialog', None):
-                self.pay_dialog.dismiss()
-                self.pay_dialog = None
-            self.exchange_sent_cart = list(self.cart)
-            self.cart = []
-            self.exchange_step = 2
-            self.update_cart_button()
-            self.prod_toolbar.title = self.fix_text(f"Étape 2: Réception de {self.target_remote_server.get('name')}")
-            self.notify('Envoi validé. Sélectionnez ce que vous recevez.', 'info')
-            if hasattr(self, 'remote_filtered_products_in'):
-                self.current_product_list_source = self.remote_filtered_products_in
-                self.load_more_products(reset=True)
-
-            def switch_to_products(dt):
-                self.sm.transition.direction = 'right'
-                self.sm.current = 'products'
-            Clock.schedule_once(switch_to_products, 0.1)
-            return
         if getattr(self, 'pay_dialog', None):
             self.pay_dialog.dismiss()
             self.pay_dialog = None
         payment_method = ''
-        if self.current_mode in ['invoice_sale', 'invoice_purchase']:
+        if self.current_mode in ['invoice_sale', 'invoice_purchase', 'remote_transfer_out', 'remote_transfer_in']:
             if hasattr(self, 'payment_methods') and hasattr(self, 'current_method_index'):
                 try:
                     payment_method = self.payment_methods[self.current_method_index]['value']
                 except:
                     payment_method = ''
-        if self.current_mode == 'transfer':
+        if self.current_mode in ['transfer']:
             paid_amount = 0
         else:
             try:
@@ -7859,6 +8027,39 @@ class StockApp(MDApp):
         except:
             self.sm.current = 'dashboard'
 
+    def force_reset_app_state(self):
+        print('[RECOVERY] Nettoyage et coupure des connexions en cours...')
+        self.is_transaction_in_progress = False
+        self.is_syncing_articles = False
+        self.is_gps_syncing = False
+        self.is_syncing_offline_data = False
+        if hasattr(self, 'ping_session') and self.ping_session:
+            try:
+                self.ping_session.close()
+            except:
+                pass
+            self.ping_session = None
+        try:
+            self.close_barcode_scanner()
+        except:
+            pass
+        dialogs = ['dialog', 'pay_dialog', 'srv_dialog', 'loading_sync_dialog', 'sync_articles_dialog']
+        for d in dialogs:
+            obj = getattr(self, d, None)
+            if obj:
+                try:
+                    obj.dismiss()
+                except:
+                    pass
+                setattr(self, d, None)
+        try:
+            from kivy.clock import Clock
+            if hasattr(self, '_heartbeat_event') and self._heartbeat_event:
+                self._heartbeat_event.cancel()
+            self._heartbeat_event = Clock.schedule_interval(self.check_server_heartbeat, 5)
+        except:
+            pass
+
     def open_barcode_scanner(self, instance):
         self.temp_scanned_cart = []
         self.potential_code = None
@@ -8156,6 +8357,16 @@ class StockApp(MDApp):
                 if product.get('remote_id'):
                     new_item['remote_id'] = product.get('remote_id')
                 self.cart.append(new_item)
+                prod_id = str(product.get('id'))
+                if isinstance(self.current_product_list_source, list):
+                    self.current_product_list_source = [item for item in self.current_product_list_source if str(item.get('id')) != prod_id]
+                if isinstance(self.all_products_raw, list):
+                    self.all_products_raw = [item for item in self.all_products_raw if str(item.get('id')) != prod_id]
+                if hasattr(self, 'remote_filtered_products_out') and isinstance(self.remote_filtered_products_out, list):
+                    self.remote_filtered_products_out = [item for item in self.remote_filtered_products_out if str(item.get('id')) != prod_id]
+                if hasattr(self, 'remote_filtered_products_in') and isinstance(self.remote_filtered_products_in, list):
+                    self.remote_filtered_products_in = [item for item in self.remote_filtered_products_in if str(item.get('id')) != prod_id]
+                self.load_more_products(reset=True)
             self.update_cart_button()
         except Exception as e:
             print(f'Add Cart Error: {e}')
@@ -8198,19 +8409,6 @@ class StockApp(MDApp):
         content.add_widget(close_btn)
         self.zoom_dialog = MDDialog(title=title_text, type='custom', content_cls=content, size_hint=(0.9, None))
         self.zoom_dialog.open()
-
-    def on_resume(self):
-        if platform == 'android':
-            self.start_gps_service()
-        return True
-
-    def on_stop(self):
-        if platform == 'android' and hasattr(self, 'location_manager') and self.location_manager:
-            try:
-                if hasattr(self, 'location_listener') and self.location_listener:
-                    self.location_manager.removeUpdates(self.location_listener)
-            except:
-                pass
 
     def start_gps_service(self):
         if platform != 'android':
@@ -8376,6 +8574,7 @@ class StockApp(MDApp):
         return False
 
     def handle_back_button(self):
+        self.force_reset_app_state()
         if hasattr(self, 'scan_dialog') and self.scan_dialog:
             self.close_barcode_scanner()
             return
@@ -8383,7 +8582,10 @@ class StockApp(MDApp):
         for d_name in dialogs:
             d = getattr(self, d_name, None)
             if d:
-                d.dismiss()
+                try:
+                    d.dismiss()
+                except:
+                    pass
                 setattr(self, d_name, None)
                 return
         current_screen = self.sm.current
@@ -8395,7 +8597,13 @@ class StockApp(MDApp):
             self.show_exit_confirmation()
 
     def show_exit_confirmation(self):
-        self.exit_dialog = MDDialog(title='Attention', text="Voulez-vous vraiment quitter l'application ?", buttons=[MDFlatButton(text='NON', on_release=lambda x: self.exit_dialog.dismiss()), MDRaisedButton(text='OUI, QUITTER', md_bg_color=(0.8, 0, 0, 1), text_color=(1, 1, 1, 1), on_release=self.stop)])
+
+        def hard_exit(x):
+            self.force_reset_app_state()
+            self.stop()
+            import sys
+            sys.exit(0)
+        self.exit_dialog = MDDialog(title='Attention', text="Voulez-vous vraiment quitter l'application ?", buttons=[MDFlatButton(text='NON', on_release=lambda x: self.exit_dialog.dismiss()), MDRaisedButton(text='OUI, QUITTER', md_bg_color=(0.8, 0, 0, 1), text_color=(1, 1, 1, 1), on_release=hard_exit)])
         self.exit_dialog.open()
 
     def cleanup_old_gps_logs(self):
