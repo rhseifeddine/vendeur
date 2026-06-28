@@ -1296,17 +1296,14 @@ class StockApp(MDApp):
             self.notify("Opération complètement annulée. Rien n'a été enregistré.", 'warning')
 
     def on_pause(self):
-        self.force_reset_app_state()
         return True
 
     def on_resume(self):
-        self.force_reset_app_state()
         if platform == 'android':
             self.start_gps_service()
         return True
 
     def on_stop(self):
-        self.force_reset_app_state()
         if platform == 'android' and hasattr(self, 'location_manager') and self.location_manager:
             try:
                 if hasattr(self, 'location_listener') and self.location_listener:
@@ -4046,7 +4043,7 @@ class StockApp(MDApp):
     def _perform_ping_request(self, url, is_local, confirmed_ip):
         import time
         import requests
-        if not hasattr(self, 'ping_session'):
+        if not hasattr(self, 'ping_session') or self.ping_session is None:
             self.ping_session = requests.Session()
             self.ping_session.headers.update({'User-Agent': 'MagProMobile/1.0'})
         start_time = time.time()
@@ -8120,41 +8117,35 @@ class StockApp(MDApp):
 
     def go_back(self):
         try:
+            from kivy.core.window import Window
             Window.release_all_keyboards()
             self.editing_transaction_key = None
             self.current_editing_server_id = None
             self.editing_payment_amount = None
             if hasattr(self, 'editing_payment_method'):
                 del self.editing_payment_method
-            if self.search_field:
+            if getattr(self, 'search_field', None):
                 self.search_field.text = ''
             self.cart = []
             self.update_cart_button()
-            self.load_products_from_cache()
             if self.is_server_reachable:
                 self.fetch_products()
+            else:
+                self.load_products_from_cache()
             self.sm.current = 'dashboard'
             self._reset_notification_state(0)
-        except:
+        except Exception as e:
+            print(f'[UI] Erreur lors du go_back: {e}')
             self.sm.current = 'dashboard'
 
     def force_reset_app_state(self):
-        print('[RECOVERY] Nettoyage et coupure des connexions en cours...')
+        print('[RECOVERY] Nettoyage UI (Connexions réseau préservées)...')
         self.is_transaction_in_progress = False
-        self.is_syncing_articles = False
-        self.is_gps_syncing = False
-        self.is_syncing_offline_data = False
-        if hasattr(self, 'ping_session') and self.ping_session:
-            try:
-                self.ping_session.close()
-            except:
-                pass
-            self.ping_session = None
         try:
             self.close_barcode_scanner()
         except:
             pass
-        dialogs = ['dialog', 'pay_dialog', 'srv_dialog', 'loading_sync_dialog', 'sync_articles_dialog']
+        dialogs = ['loading_sync_dialog', 'sync_articles_dialog']
         for d in dialogs:
             obj = getattr(self, d, None)
             if obj:
@@ -8163,13 +8154,6 @@ class StockApp(MDApp):
                 except:
                     pass
                 setattr(self, d, None)
-        try:
-            from kivy.clock import Clock
-            if hasattr(self, '_heartbeat_event') and self._heartbeat_event:
-                self._heartbeat_event.cancel()
-            self._heartbeat_event = Clock.schedule_interval(self.check_server_heartbeat, 5)
-        except:
-            pass
 
     def open_barcode_scanner(self, instance):
         self.temp_scanned_cart = []
@@ -8690,11 +8674,10 @@ class StockApp(MDApp):
         return False
 
     def handle_back_button(self):
-        self.force_reset_app_state()
         if hasattr(self, 'scan_dialog') and self.scan_dialog:
             self.close_barcode_scanner()
             return
-        dialogs = ['dialog', 'ae_dialog', 'pay_dialog', 'entity_dialog', 'mgmt_dialog', 'srv_dialog', 'pending_dialog', 'bt_dialog', 'filter_dialog', 'options_dialog', 'cat_dialog', 'auth_dialog', 'toggle_dialog', 'logout_diag', 'stop_sync_dialog', 'confirm_del_dialog', 'overpay_dialog', 'debt_dialog']
+        dialogs = ['dialog', 'ae_dialog', 'pay_dialog', 'entity_dialog', 'mgmt_dialog', 'srv_dialog', 'pending_dialog', 'bt_dialog', 'filter_dialog', 'options_dialog', 'cat_dialog', 'auth_dialog', 'toggle_dialog', 'logout_diag', 'stop_sync_dialog', 'confirm_del_dialog', 'overpay_dialog', 'debt_dialog', 'sync_report_dialog', 'loading_sync_dialog']
         for d_name in dialogs:
             d = getattr(self, d_name, None)
             if d:
