@@ -1108,10 +1108,14 @@ class StockApp(MDApp):
         Clock.schedule_once(lambda dt: self._process_next_sync_request(), 0.5)
 
     def _process_next_sync_request(self):
-        import json
+        import threading
+        import requests
+        import urllib3
         from kivy.clock import Clock
         from kivy.metrics import dp
-        if not hasattr(self, 'sync_engine_state') or not self.sync_modal:
+        from kivy.animation import Animation
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        if not hasattr(self, 'sync_engine_state') or not getattr(self, 'sync_modal', None):
             return
         reqs = self.sync_engine_state['reqs']
         idx = self.sync_engine_state['current_index']
@@ -1120,14 +1124,15 @@ class StockApp(MDApp):
             self.sync_spinner.opacity = 0
             self.sync_icon.icon = 'check-circle'
             self.sync_icon.text_color = (0, 0.7, 0, 1)
-            from kivy.animation import Animation
             anim = Animation(opacity=1, font_size=dp(100), d=0.4, t='out_back')
             anim.start(self.sync_icon)
             self.sync_modal_title.text = 'Opération Réussie !'
             self.sync_status_label.text = 'Toutes les données sont synchronisées.'
+            self.sync_status_label.theme_text_color = 'Secondary'
 
             def finish_all(dt):
-                self.sync_modal.dismiss()
+                if getattr(self, 'sync_modal', None):
+                    self.sync_modal.dismiss()
                 self.is_transaction_in_progress = False
                 self.notify('Opération multi-magasins réussie avec succès ✅', 'success')
                 self.cart = []
@@ -1143,74 +1148,126 @@ class StockApp(MDApp):
         self.sync_spinner.active = True
         self.sync_spinner.opacity = 1
         self.sync_icon.opacity = 0
-        self.sync_btn_box.height = 0
-        self.sync_btn_box.opacity = 0
         self.sync_modal_title.text = f'Étape {current_step}/{total_steps}'
         self.sync_status_label.text = f'Envoi vers {target_str}...'
         self.sync_status_label.theme_text_color = 'Secondary'
 
-        def on_success(request, result):
-            if isinstance(result, dict) and result.get('status') == 'success':
-                current_req['server_id'] = result.get('server_id')
-                self.sync_engine_state['current_index'] += 1
-                self._process_next_sync_request()
-            else:
-                on_fail(request, result)
+        def worker_thread():
+            final_headers = current_req['headers'].copy()
+            if current_req['type'] == 'local':
+                if self.store and self.store.exists('config'):
+                    local_pin = self.store.get('config').get('server_pin', '')
+                    if local_pin:
+                        final_headers['X-Server-PIN'] = str(local_pin)
+            final_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MagProMobile/1.0'
+            final_headers['Accept'] = 'application/json'
+            try:
+                res = requests.post(current_req['url'], json=current_req['payload'], headers=final_headers, timeout=10.0, verify=False)
+                if res.status_code == 200:
+                    result = res.json()
+                    if result.get('status') == 'success':
+                        Clock.schedule_once(lambda dt: handle_success(result), 0)
+                    else:
+                        error_msg = result.get('message', 'Le serveur a refusé la demande.')
+                        Clock.schedule_once(lambda dt: handle_fail(error_msg), 0)
+                else:
+                    Clock.schedule_once(lambda dt: handle_fail('Le magasin est actuellement injoignable ou hors ligne.'), 0)
+            except requests.exceptions.Timeout:
+                Clock.schedule_once(lambda dt: handle_fail('Connexion très faible ou coupée.'), 0)
+            except requests.exceptions.ConnectionError:
+                Clock.schedule_once(lambda dt: handle_fail("Pas d'internet. Vérifiez votre Wi-Fi ou 4G."), 0)
+            except Exception:
+                Clock.schedule_once(lambda dt: handle_fail('Erreur de communication avec le réseau.'), 0)
 
-        def on_fail(request, error):
+        def handle_success(result):
+            current_req['server_id'] = result.get('server_id')
+            self.sync_engine_state['current_index'] += 1
+            self._process_next_sync_request()
+
+        def handle_fail(error_msg):
             self.sync_spinner.active = False
             self.sync_spinner.opacity = 0
             self.sync_icon.icon = 'alert-circle'
             self.sync_icon.text_color = (0.8, 0.1, 0.1, 1)
             self.sync_icon.font_size = '70sp'
             self.sync_icon.opacity = 1
-            self.sync_modal_title.text = 'Erreur'
-            real_error = 'Vérifiez la connexion internet.'
-            if isinstance(error, dict) and 'message' in error:
-                real_error = error.get('message')
-            elif hasattr(request, 'error') and request.error:
-                real_error = str(request.error)[:60]
-            self.sync_status_label.text = f'Échec vers {target_str}.\n{real_error}'
+            self.sync_modal_title.text = 'Erreur de Connexion'
+            self.sync_status_label.text = f'Échec vers {target_str}.\n{error_msg}'
             self.sync_status_label.theme_text_color = 'Error'
             self.sync_btn_box.height = dp(50)
             self.sync_btn_box.opacity = 1
-        UrlRequest(current_req['url'], req_body=json.dumps(current_req['payload']), req_headers=current_req['headers'], method='POST', on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=10)
+            self.sync_btn_cancel.disabled = False
+            self.sync_btn_retry.disabled = False
+        threading.Thread(target=worker_thread, daemon=True).start()
 
     def _on_sync_retry_clicked(self, instance):
-        self._process_next_sync_request()
-
-    def _on_sync_cancel_clicked(self, instance):
-        self.sync_btn_cancel.disabled = True
+        from kivy.clock import Clock
         self.sync_btn_retry.disabled = True
-        self.sync_modal_title.text = 'Annulation en cours...'
-        self.sync_status_label.text = 'Nettoyage des opérations partielles...'
+        self.sync_btn_cancel.disabled = True
+        self.sync_btn_box.height = 0
+        self.sync_btn_box.opacity = 0
         self.sync_spinner.active = True
         self.sync_spinner.opacity = 1
         self.sync_icon.opacity = 0
-        reqs = self.sync_engine_state['reqs']
+        self.sync_modal_title.text = 'Nouvelle tentative...'
+        self.sync_status_label.text = 'Reconnexion en cours...'
+        self.sync_status_label.theme_text_color = 'Secondary'
+        Clock.schedule_once(lambda dt: self._process_next_sync_request(), 0.5)
+
+    def _on_sync_cancel_clicked(self, instance):
+        import threading
+        import requests
+        import urllib3
+        from kivy.clock import Clock
+        from kivy.metrics import dp
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        self.sync_btn_cancel.disabled = True
+        self.sync_btn_retry.disabled = True
+        self.sync_modal_title.text = 'Annulation en cours...'
+        self.sync_status_label.text = 'Nettoyage des opérations. Ne fermez pas...'
+        self.sync_status_label.theme_text_color = 'Error'
+        self.sync_spinner.active = True
+        self.sync_spinner.opacity = 1
+        self.sync_icon.opacity = 0
+        reqs = getattr(self, 'sync_engine_state', {}).get('reqs', [])
         completed_reqs = [r for r in reqs if r.get('server_id') is not None]
         if not completed_reqs:
-            self._finish_rollback()
+            self._finish_rollback(0, 0)
             return
-        self.rollback_count = len(completed_reqs)
-        import json
 
-        def check_rollback_done(req, res):
-            self.rollback_count -= 1
-            if self.rollback_count <= 0:
-                self._finish_rollback()
-        for r in completed_reqs:
-            base_url = r['url'].split('/api/')[0]
-            del_url = f'{base_url}/api/delete_transaction'
-            is_tr = r['doc_type'] == 'TR'
-            payload = {'server_id': r['server_id'], 'is_transfer': is_tr}
-            UrlRequest(del_url, req_body=json.dumps(payload), req_headers=r['headers'], method='POST', on_success=check_rollback_done, on_failure=check_rollback_done, on_error=check_rollback_done, timeout=5)
+        def rollback_worker():
+            success_count = 0
+            fail_count = 0
+            for r in completed_reqs:
+                try:
+                    base_url = r['url'].split('/api/')[0]
+                    del_url = f'{base_url}/api/delete_transaction'
+                    is_tr = r['doc_type'] == 'TR'
+                    payload = {'server_id': r['server_id'], 'is_transfer': is_tr}
+                    res = requests.post(del_url, json=payload, headers=r['headers'], timeout=8.0, verify=False)
+                    if res.status_code == 200 and res.json().get('status') == 'success':
+                        success_count += 1
+                        r['server_id'] = None
+                    else:
+                        fail_count += 1
+                except Exception as e:
+                    print(f'[Rollback Error] {e}')
+                    fail_count += 1
+            Clock.schedule_once(lambda dt: self._finish_rollback(success_count, fail_count), 0)
+        threading.Thread(target=rollback_worker, daemon=True).start()
 
-    def _finish_rollback(self):
-        from kivy.clock import Clock
-        self.sync_modal.dismiss()
+    def _finish_rollback(self, success_count, fail_count):
+        if getattr(self, 'sync_modal', None):
+            self.sync_modal.dismiss()
         self.is_transaction_in_progress = False
-        self.notify('Opération complètement annulée.', 'warning')
+        if fail_count > 0:
+            self.notify(f'Annulation partielle. {fail_count} erreur(s) de réseau.', 'error')
+            from kivymd.uix.dialog import MDDialog
+            from kivymd.uix.button import MDFlatButton
+            self.rollback_warn_dialog = MDDialog(title='Attention (Connexion Perdue)', text="La connexion a été perdue pendant l'annulation.\nCertaines opérations partielles n'ont pas pu être supprimées du serveur.\nVeuillez vérifier manuellement l'historique.", buttons=[MDFlatButton(text='OK', theme_text_color='Error', on_release=lambda x: getattr(self, 'rollback_warn_dialog').dismiss())])
+            self.rollback_warn_dialog.open()
+        else:
+            self.notify("Opération complètement annulée. Rien n'a été enregistré.", 'warning')
 
     def on_pause(self):
         self.force_reset_app_state()
@@ -6742,12 +6799,14 @@ class StockApp(MDApp):
                 paid_amount = float(self.txt_paid.get_value()) if self.txt_paid.get_value() else 0
             except:
                 paid_amount = 0
-            if paid_amount < total_amount and self.current_mode not in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            modes_sans_alerte_credit = ['remote_exchange', 'remote_transfer_out', 'remote_transfer_in']
+            if paid_amount < total_amount and self.current_mode not in modes_sans_alerte_credit:
                 self.is_transaction_in_progress = False
                 remaining = total_amount - paid_amount
                 self.show_credit_warning(paid_amount, total_amount, remaining)
                 return
-            if paid_amount > total_amount and self.current_mode not in ['return_sale', 'return_purchase', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            modes_sans_alerte_excedent = ['return_sale', 'return_purchase', 'remote_exchange']
+            if paid_amount > total_amount and self.current_mode not in modes_sans_alerte_excedent:
                 self.is_transaction_in_progress = False
                 excess = paid_amount - total_amount
                 self.show_overpayment_dialog(paid_amount, total_amount, excess)
@@ -6755,7 +6814,10 @@ class StockApp(MDApp):
 
         def _trigger_process(dt):
             self.is_transaction_in_progress = False
-            self.process_transaction(paid_amount, total_amount, method=payment_method)
+            if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+                self.submit_remote_transfer(paid_amount, payment_method)
+            else:
+                self.process_transaction(paid_amount, total_amount, method=payment_method)
         Clock.schedule_once(_trigger_process, 0.1)
 
     def _cycle_payment_method(self, instance):
@@ -6765,6 +6827,10 @@ class StockApp(MDApp):
         self._recalc_ui_totals()
 
     def show_overpayment_dialog(self, paid, total, excess):
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.label import MDLabel
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.dialog import MDDialog
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing='15dp', padding=[0, '10dp', 0, 0])
         lbl_info = MDLabel(text=f'[b]Montant saisi:[/b] {paid:.2f} DA\n[b]Total:[/b] {total:.2f} DA', markup=True, halign='center', theme_text_color='Primary', font_style='Body1', size_hint_y=None, adaptive_height=True)
         content.add_widget(lbl_info)
@@ -6772,14 +6838,31 @@ class StockApp(MDApp):
         if self.current_mode in ['return_sale', 'return_purchase']:
             msg_text = f"L'excédent [color=#00C853][b]({excess:.2f} DA)[/b][/color] sera déduit du solde."
         else:
-            msg_text = f"L'excédent [color=#00C853][b]({excess:.2f} DA)[/b][/color] sera enregistré comme une opération séparée [b](VERSEMENT/RÈGLEMENT)[/b]."
+            msg_text = f"L'excédent [color=#00C853][b]({excess:.2f} DA)[/b][/color] sera enregistré comme une opération séparée [b](AVANCE / VERSEMENT)[/b]."
         lbl_msg = MDLabel(text=msg_text, markup=True, halign='center', theme_text_color='Primary', font_style='Subtitle1', size_hint_y=None, adaptive_height=True)
         content.add_widget(lbl_msg)
-        buttons = [MDFlatButton(text='CORRIGER', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: [self.overpay_dialog.dismiss(), self.open_payment_dialog(None)]), MDRaisedButton(text='CONFIRMER', md_bg_color=(0, 0.7, 0, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=lambda x: [self.overpay_dialog.dismiss(), self.process_transaction(paid, total)])]
-        self.overpay_dialog = MDDialog(title="Création d'un Versement", type='custom', content_cls=content, buttons=buttons)
+
+        def on_confirm(x):
+            self.overpay_dialog.dismiss()
+            method = ''
+            if hasattr(self, 'payment_methods') and hasattr(self, 'current_method_index'):
+                try:
+                    method = self.payment_methods[self.current_method_index]['value']
+                except:
+                    pass
+            if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+                self.submit_remote_transfer(paid, method)
+            else:
+                self.process_transaction(paid, total, method=method)
+        buttons = [MDFlatButton(text='CORRIGER', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: [self.overpay_dialog.dismiss(), self.open_payment_dialog(None)]), MDRaisedButton(text='CONFIRMER', md_bg_color=(0, 0.7, 0, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=on_confirm)]
+        self.overpay_dialog = MDDialog(title="Création d'une Avance", type='custom', content_cls=content, buttons=buttons)
         self.overpay_dialog.open()
 
     def show_credit_warning(self, paid, total, remaining):
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.label import MDLabel
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.dialog import MDDialog
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing='15dp', padding=[0, '10dp', 0, 0])
         lbl_info = MDLabel(text=f'[b]Montant saisi:[/b] {paid:.2f} DA\n[b]Total:[/b] {total:.2f} DA', markup=True, halign='center', theme_text_color='Primary', font_style='Body1', size_hint_y=None, adaptive_height=True)
         content.add_widget(lbl_info)
@@ -6787,11 +6870,24 @@ class StockApp(MDApp):
         if self.current_mode in ['return_sale', 'return_purchase']:
             msg_text = f'Vous rendez [b]{paid:.2f} DA[/b].\nLe reste [color=#D32F2F][b]({remaining:.2f} DA)[/b][/color] sera déduit de la dette du tiers.'
         else:
-            msg_text = f'Le montant versé est insuffisant.\nLe reste [color=#D32F2F][b]({remaining:.2f} DA)[/b][/color] sera enregistré comme [b]CRÉDIT [/b].'
+            msg_text = f'Le montant versé est insuffisant.\nLe reste [color=#D32F2F][b]({remaining:.2f} DA)[/b][/color] sera enregistré comme [b]CRÉDIT (Dette)[/b].'
         lbl_msg = MDLabel(text=msg_text, markup=True, halign='center', theme_text_color='Primary', font_style='Subtitle1', size_hint_y=None, adaptive_height=True)
         content.add_widget(lbl_msg)
-        buttons = [MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.debt_dialog.dismiss()), MDRaisedButton(text='CONFIRMER', md_bg_color=(0.8, 0, 0, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=lambda x: [self.debt_dialog.dismiss(), self.process_transaction(paid, total)])]
-        self.debt_dialog = MDDialog(title='Attention: Crédit', type='custom', content_cls=content, buttons=buttons)
+
+        def on_confirm(x):
+            self.debt_dialog.dismiss()
+            method = ''
+            if hasattr(self, 'payment_methods') and hasattr(self, 'current_method_index'):
+                try:
+                    method = self.payment_methods[self.current_method_index]['value']
+                except:
+                    pass
+            if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+                self.submit_remote_transfer(paid, method)
+            else:
+                self.process_transaction(paid, total, method=method)
+        buttons = [MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.debt_dialog.dismiss()), MDRaisedButton(text='CONFIRMER', md_bg_color=(0.8, 0, 0, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=on_confirm)]
+        self.debt_dialog = MDDialog(title='Attention: Crédit / Dette', type='custom', content_cls=content, buttons=buttons)
         self.debt_dialog.open()
 
     def process_transaction(self, paid_amount, total_amount, method=None):
