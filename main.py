@@ -630,47 +630,62 @@ class StockApp(MDApp):
         self.sync_selected_stores = {i: True for i in range(len(self.sync_servers_list))}
         self.sync_status_icons = {}
         self.sync_checkboxes = {}
+        self.sync_status_labels = {}
         from kivymd.uix.selectioncontrol import MDCheckbox
         from kivymd.uix.card import MDCard
+        from kivymd.uix.label import MDLabel, MDIcon
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.scrollview import MDScrollView
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDRaisedButton, MDFlatButton
+        from kivy.metrics import dp
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing=dp(15), padding=[0, dp(10), 0, 0])
-        info_label = MDLabel(text='Sélectionnez les magasins à synchroniser.\nLe système va unifier les produits via Code-Barre avec un stock initial de 0.', theme_text_color='Secondary', font_style='Caption', halign='center', adaptive_height=True)
+        info_label = MDLabel(text='Sélectionnez les magasins à synchroniser.\nLe système va unifier les produits (Articles) via Code-Barre.', theme_text_color='Secondary', font_style='Caption', halign='center', adaptive_height=True)
         content.add_widget(info_label)
-        scroll = MDScrollView(size_hint_y=None, height=dp(250))
+        scroll = MDScrollView(size_hint_y=None, height=dp(450))
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
         indexed_servers = list(enumerate(self.sync_servers_list))
         indexed_servers.sort(key=lambda item: str(item[1].get('name', '')).lower())
         for original_idx, srv in indexed_servers:
             srv_name = self.fix_text(srv.get('name', f'Magasin {original_idx + 1}'))
-            card = MDCard(orientation='horizontal', padding=[dp(10), dp(5), dp(15), dp(5)], spacing=dp(10), size_hint_y=None, height=dp(55), radius=[10], elevation=1, md_bg_color=(0.98, 0.98, 0.98, 1))
+            card = MDCard(orientation='horizontal', padding=[dp(10), dp(5), dp(15), dp(5)], spacing=dp(10), size_hint_y=None, height=dp(65), radius=[10], elevation=1, md_bg_color=(0.98, 0.98, 0.98, 1))
             chk = MDCheckbox(active=True, size_hint=(None, None), size=(dp(48), dp(48)), pos_hint={'center_y': 0.5})
             chk.bind(active=lambda inst, val, idx=original_idx: self._toggle_sync_store(idx, val))
             self.sync_checkboxes[original_idx] = chk
             card.add_widget(chk)
-            lbl_name = MDLabel(text=srv_name, bold=True, font_style='Subtitle2', theme_text_color='Primary', pos_hint={'center_y': 0.5})
-            card.add_widget(lbl_name)
-            icon_status = MDIcon(icon='sync', theme_text_color='Hint', font_size='26sp', pos_hint={'center_y': 0.5})
+            txt_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
+            lbl_name = MDLabel(text=srv_name, bold=True, font_style='Subtitle1', theme_text_color='Primary')
+            lbl_status = MDLabel(text='Vérification rapide...', font_style='Caption', theme_text_color='Hint')
+            self.sync_status_labels[original_idx] = lbl_status
+            txt_box.add_widget(lbl_name)
+            txt_box.add_widget(lbl_status)
+            card.add_widget(txt_box)
+            icon_status = MDIcon(icon='timer-sand', theme_text_color='Hint', font_size='26sp', pos_hint={'center_y': 0.5})
             self.sync_status_icons[original_idx] = icon_status
             card.add_widget(icon_status)
             list_layout.add_widget(card)
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-        self.btn_start_sync = MDRaisedButton(text='DÉMARRER', md_bg_color=(0.1, 0.5, 0.8, 1), disabled=True, on_release=self.execute_articles_sync)
-        self.sync_articles_dialog = MDDialog(title='Sélection des Magasins', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.sync_articles_dialog.dismiss()), self.btn_start_sync])
+        self.btn_start_sync = MDRaisedButton(text='DÉMARRER LA SYNC', md_bg_color=(0.1, 0.5, 0.8, 1), disabled=True, on_release=self.execute_articles_sync)
+        self.sync_articles_dialog = MDDialog(title='Synchronisation des Magasins', type='custom', content_cls=content, size_hint=(0.95, None), radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.sync_articles_dialog.dismiss()), self.btn_start_sync])
         self.sync_articles_dialog.open()
-        import threading
-        threading.Thread(target=self._check_sync_connections, daemon=True).start()
+        self._check_sync_connections()
 
-    @mainthread
     def _update_sync_status_ui(self, index, working_url, is_online):
         if not hasattr(self, 'sync_articles_dialog') or not self.sync_articles_dialog:
             return
         self.sync_servers_list[index]['_working_url'] = working_url
         icon_widget = self.sync_status_icons.get(index)
         chk_widget = self.sync_checkboxes.get(index)
+        lbl_widget = getattr(self, 'sync_status_labels', {}).get(index)
         if is_online:
             icon_widget.icon = 'wifi'
             icon_widget.text_color = (0, 0.7, 0, 1)
             icon_widget.theme_text_color = 'Custom'
+            if lbl_widget:
+                lbl_widget.text = 'En ligne'
+                lbl_widget.theme_text_color = 'Custom'
+                lbl_widget.text_color = (0, 0.7, 0, 1)
         else:
             icon_widget.icon = 'wifi-off'
             icon_widget.text_color = (0.8, 0, 0, 1)
@@ -678,49 +693,56 @@ class StockApp(MDApp):
             chk_widget.active = False
             chk_widget.disabled = True
             self.sync_selected_stores[index] = False
+            if lbl_widget:
+                lbl_widget.text = 'Hors ligne'
+                lbl_widget.theme_text_color = 'Error'
 
     def _toggle_sync_store(self, index, is_active):
         self.sync_selected_stores[index] = is_active
 
-    def _get_working_url_helper(self, srv):
+    def _check_sync_connections(self):
         import requests
         import urllib3
-        import certifi
-        import os
-        import re
+        import concurrent.futures
         from kivy.clock import Clock
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
-        local_ip = str(srv.get('local_ip', '')).strip()
-        ext_ip = str(srv.get('ext_ip', '')).strip()
-        urls_to_test = []
-        if ext_ip:
-            urls_to_test.append(f"https://{ext_ip.replace('https://', '').replace('http://', '').strip('/')}")
-        if local_ip:
-            urls_to_test.append(f"http://{local_ip.replace('http://', '').strip('/')}:{DEFAULT_PORT}")
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36', 'Accept': 'application/json'}
-        for test_url in urls_to_test:
-            try:
-                res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=10, verify=False)
-                if res.status_code == 200:
-                    return test_url
-                else:
-                    err = f'Rejeté par Cloudflare (Code: {res.status_code})'
-                    Clock.schedule_once(lambda dt, msg=err: self.notify(msg, 'error'), 0)
-            except Exception as e:
-                err_msg = str(e)[:45]
-                Clock.schedule_once(lambda dt, msg=err_msg: self.notify(f'Erreur de connexion : {msg}', 'error'), 0)
-                continue
-        return None
 
-    def _check_sync_connections(self):
-        for i, srv in enumerate(self.sync_servers_list):
-            working_url = self._get_working_url_helper(srv)
-            is_online = working_url is not None
-            from kivy.clock import Clock
-            Clock.schedule_once(lambda dt, idx=i, url=working_url, online=is_online: self._update_sync_status_ui(idx, url, online), 0)
-        from kivy.clock import Clock
-        Clock.schedule_once(lambda dt: setattr(self.btn_start_sync, 'disabled', False), 0)
+        def ping_store(idx, srv):
+            local_ip = str(srv.get('local_ip', '')).strip()
+            ext_ip = str(srv.get('ext_ip', '')).strip()
+            pin = str(srv.get('pin', '')).strip()
+            urls_to_test = []
+            if ext_ip:
+                urls_to_test.append(f"https://{ext_ip.replace('https://', '').replace('http://', '').strip('/')}")
+            if local_ip:
+                urls_to_test.append(f"http://{local_ip.replace('http://', '').strip('/')}:{DEFAULT_PORT}")
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MagProMobile/1.0', 'Accept': 'application/json'}
+            if pin:
+                headers['X-Server-PIN'] = pin
+            working_url = None
+            for test_url in urls_to_test:
+                try:
+                    res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=3.0, verify=False)
+                    if res.status_code == 200:
+                        working_url = test_url
+                        break
+                except:
+                    continue
+            return (idx, working_url)
+
+        def worker_thread():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futures = [executor.submit(ping_store, i, srv) for i, srv in enumerate(self.sync_servers_list)]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        idx, url = future.result()
+                        is_online = url is not None
+                        Clock.schedule_once(lambda dt, i=idx, u=url, o=is_online: self._update_sync_status_ui(i, u, o), 0)
+                    except Exception:
+                        pass
+            Clock.schedule_once(lambda dt: setattr(self.btn_start_sync, 'disabled', False), 0)
+        import threading
+        threading.Thread(target=worker_thread, daemon=True).start()
 
     def execute_articles_sync(self, instance):
         if getattr(self, 'is_syncing_articles', False):
