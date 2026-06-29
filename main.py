@@ -1033,13 +1033,66 @@ class StockApp(MDApp):
             self.pay_dialog.dismiss()
             self.pay_dialog = None
         self.is_transaction_in_progress = True
+        validation_error = False
+        bad_product_name = ''
+        bad_reason = ''
 
         def build_items_payload(source_cart, is_remote=False):
+            nonlocal validation_error, bad_product_name, bad_reason
             payload = []
+            remote_catalog_by_barcode = {}
+            if is_remote:
+                import os
+                from kivy.storage.jsonstore import JsonStore
+                cache_file = os.path.join(self.user_data_dir, 'remote_stores_cache.json')
+                remote_cache = JsonStore(cache_file)
+                t_name = self.target_remote_server.get('name', 'Inconnu')
+                c_key = f"store_{t_name.replace(' ', '_')}"
+                if remote_cache.exists(c_key):
+                    for rp in remote_cache.get(c_key).get('products', []):
+                        bc = str(rp.get('barcode', '')).strip()
+                        if bc:
+                            remote_catalog_by_barcode[bc] = int(rp.get('id', 0))
+            local_catalog_by_barcode = {}
+            if self.cache_store.exists('products'):
+                cd = self.cache_store.get('products').get('data', [])
+                if isinstance(cd, dict):
+                    cd = cd.get('data', list(cd.values()))
+                for lp in cd:
+                    bc = str(lp.get('barcode', '')).strip()
+                    if bc:
+                        local_catalog_by_barcode[bc] = int(lp.get('id', 0))
             for item in source_cart:
-                prod_id = item.get('remote_id') if is_remote and item.get('remote_id') else item['id']
-                purchase_price = float(item.get('price', 0))
-                payload.append({'id': prod_id, 'qty': float(item['qty']), 'price': purchase_price, 'tva': 0, 'name': item['name']})
+                item_barcode = str(item.get('barcode', '')).strip()
+                if not item_barcode:
+                    for p in self.all_products_raw:
+                        if str(p.get('id')) == str(item.get('id')):
+                            item_barcode = str(p.get('barcode', '')).strip()
+                            break
+                if not item_barcode:
+                    validation_error = True
+                    bad_product_name = str(item.get('name', 'Article'))
+                    bad_reason = "Ce produit n'a aucun Code-Barres !"
+                    return []
+                prod_id = None
+                if is_remote:
+                    if item_barcode in remote_catalog_by_barcode:
+                        prod_id = remote_catalog_by_barcode[item_barcode]
+                    else:
+                        validation_error = True
+                        bad_product_name = str(item.get('name', 'Article'))
+                        bad_reason = f"Code-Barres ({item_barcode}) introuvable dans l'autre magasin."
+                        return []
+                elif item_barcode in local_catalog_by_barcode:
+                    prod_id = local_catalog_by_barcode[item_barcode]
+                else:
+                    prod_id = int(item.get('id', 0))
+                if not prod_id:
+                    validation_error = True
+                    bad_product_name = str(item.get('name', 'Article'))
+                    bad_reason = 'Erreur de correspondance interne.'
+                    return []
+                payload.append({'id': prod_id, 'qty': float(item.get('qty', 0)), 'price': float(item.get('price', 0)), 'tva': float(item.get('tva', 0)), 'name': str(item.get('name', ''))})
             return payload
         local_payloads = []
         remote_payloads = []
@@ -1056,34 +1109,40 @@ class StockApp(MDApp):
 
         def build_payload(doc_type, notes, items, entity_name, loc='store', is_exchange=False):
             total_amt = sum((float(i['qty']) * float(i['price']) for i in items))
-            if is_exchange:
-                final_paid = total_amt
-                final_method = 'Espèce'
-            else:
-                final_paid = paid_amount
-                final_method = payment_method if payment_method else 'Espèce'
-            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(final_paid), 'total': float(total_amt), 'method': final_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc}
+            final_paid = total_amt if is_exchange else paid_amount
+            final_method = 'Espèce' if is_exchange else payment_method if payment_method else 'Espèce'
+            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(final_paid), 'total': float(total_amt), 'method': final_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc, 'is_transfer': True}
         if self.current_mode == 'remote_transfer_out':
-            items_local = build_items_payload(self.cart, is_remote=False)
-            items_remote = build_items_payload(self.cart, is_remote=True)
-            local_payloads.append(build_payload('BS', f'Envoi vers: {target_name}', items_local, target_name, self.selected_location))
-            remote_payloads.append(build_payload('BA', f'Réception auto depuis: {local_name}', items_remote, local_name, 'store'))
+            i_local = build_items_payload(self.cart, False)
+            i_remote = build_items_payload(self.cart, True)
+            if not validation_error:
+                local_payloads.append(build_payload('BS', f'Envoi vers: {target_name}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('BA', f'Réception auto depuis: {local_name}', i_remote, local_name, 'store'))
         elif self.current_mode == 'remote_transfer_in':
-            items_local = build_items_payload(self.cart, is_remote=False)
-            items_remote = build_items_payload(self.cart, is_remote=True)
-            local_payloads.append(build_payload('BA', f'Réception depuis: {target_name}', items_local, target_name, self.selected_location))
-            remote_payloads.append(build_payload('BS', f'Envoi auto vers: {local_name}', items_remote, local_name, 'store'))
+            i_local = build_items_payload(self.cart, False)
+            i_remote = build_items_payload(self.cart, True)
+            if not validation_error:
+                local_payloads.append(build_payload('BA', f'Réception depuis: {target_name}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('BS', f'Envoi auto vers: {local_name}', i_remote, local_name, 'store'))
         elif self.current_mode == 'remote_exchange':
-            items_out_local = build_items_payload(getattr(self, 'exchange_sent_cart', []), is_remote=False)
-            items_out_remote = build_items_payload(getattr(self, 'exchange_sent_cart', []), is_remote=True)
-            items_in_local = build_items_payload(self.cart, is_remote=False)
-            items_in_remote = build_items_payload(self.cart, is_remote=True)
-            if items_out_local:
-                local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name}', items_out_local, target_name, self.selected_location, True))
-                remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name}', items_out_remote, local_name, 'store', True))
-            if items_in_local:
-                local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', items_in_local, target_name, self.selected_location, True))
-                remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', items_in_remote, local_name, 'store', True))
+            i_out_l = build_items_payload(getattr(self, 'exchange_sent_cart', []), False)
+            i_out_r = build_items_payload(getattr(self, 'exchange_sent_cart', []), True)
+            i_in_l = build_items_payload(self.cart, False)
+            i_in_r = build_items_payload(self.cart, True)
+            if not validation_error:
+                if i_out_l:
+                    local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name}', i_out_l, target_name, self.selected_location, True))
+                    remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name}', i_out_r, local_name, 'store', True))
+                if i_in_l:
+                    local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', i_in_l, target_name, self.selected_location, True))
+                    remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', i_in_r, local_name, 'store', True))
+        if validation_error:
+            self.is_transaction_in_progress = False
+            from kivymd.uix.dialog import MDDialog
+            from kivymd.uix.button import MDFlatButton
+            self.dialog = MDDialog(title='Rejet (Non-Conforme)', text=f"Le produit:\n[b]{bad_product_name}[/b]\n\n{bad_reason}\n\nL'opération a été bloquée pour protéger les serveurs.", buttons=[MDFlatButton(text='OK', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
+            self.dialog.open()
+            return
         remote_url = self.target_remote_url
         remote_pin = self.target_remote_server.get('pin', '')
         local_url = f'{self.api_base}/api/submit_order'
@@ -1096,9 +1155,6 @@ class StockApp(MDApp):
             self.sync_engine_state['reqs'].append({'type': 'local', 'url': local_url, 'payload': lp, 'headers': req_headers_local, 'server_id': None, 'doc_type': lp['doc_type']})
         for rp in remote_payloads:
             self.sync_engine_state['reqs'].append({'type': 'remote', 'url': remote_url, 'payload': rp, 'headers': req_headers_remote, 'server_id': None, 'doc_type': rp['doc_type']})
-        if not self.sync_engine_state['reqs']:
-            self.is_transaction_in_progress = False
-            return
         self.open_multi_sync_modal()
 
     def open_multi_sync_modal(self):
@@ -1188,22 +1244,31 @@ class StockApp(MDApp):
             final_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MagProMobile/1.0'
             final_headers['Accept'] = 'application/json'
             try:
-                res = requests.post(current_req['url'], json=current_req['payload'], headers=final_headers, timeout=10.0, verify=False)
+                res = requests.post(current_req['url'], json=current_req['payload'], headers=final_headers, timeout=30.0, verify=False)
                 if res.status_code == 200:
-                    result = res.json()
-                    if result.get('status') == 'success':
-                        Clock.schedule_once(lambda dt: handle_success(result), 0)
-                    else:
-                        error_msg = result.get('message', 'Le serveur a refusé la demande.')
-                        Clock.schedule_once(lambda dt: handle_fail(error_msg), 0)
+                    try:
+                        result = res.json()
+                        if result.get('status') == 'success':
+                            Clock.schedule_once(lambda dt: handle_success(result), 0)
+                        else:
+                            error_msg = result.get('message', 'Refusé par le serveur.')
+                            Clock.schedule_once(lambda dt: handle_fail(error_msg), 0)
+                    except:
+                        Clock.schedule_once(lambda dt: handle_fail('Réponse invalide du serveur.'), 0)
                 else:
-                    Clock.schedule_once(lambda dt: handle_fail('Le magasin est actuellement injoignable ou hors ligne.'), 0)
+                    err_txt = f'Erreur Serveur ({res.status_code})'
+                    try:
+                        err_json = res.json()
+                        err_txt += f"\n{err_json.get('message', '')}"
+                    except:
+                        pass
+                    Clock.schedule_once(lambda dt: handle_fail(err_txt), 0)
             except requests.exceptions.Timeout:
-                Clock.schedule_once(lambda dt: handle_fail('Connexion très faible ou coupée.'), 0)
+                Clock.schedule_once(lambda dt: handle_fail('Connexion réseau très lente (Délai dépassé).'), 0)
             except requests.exceptions.ConnectionError:
-                Clock.schedule_once(lambda dt: handle_fail("Pas d'internet. Vérifiez votre Wi-Fi ou 4G."), 0)
-            except Exception:
-                Clock.schedule_once(lambda dt: handle_fail('Erreur de communication avec le réseau.'), 0)
+                Clock.schedule_once(lambda dt: handle_fail("Pas d'internet ou le magasin cible est hors ligne."), 0)
+            except Exception as e:
+                Clock.schedule_once(lambda dt: handle_fail(f'Erreur: {str(e)[:40]}'), 0)
 
         def handle_success(result):
             current_req['server_id'] = result.get('server_id')
@@ -1732,7 +1797,11 @@ class StockApp(MDApp):
 
         def process_and_display_products(target_prods, is_from_cache=False):
             try:
-                target_barcodes_map = {str(p.get('barcode', '')).strip(): p for p in target_prods if str(p.get('barcode', '')).strip()}
+                target_barcodes_map = {}
+                for p in target_prods:
+                    bc = str(p.get('barcode', '')).strip()
+                    if bc:
+                        target_barcodes_map[bc] = p
                 filtered_local_products_out = []
                 filtered_local_products_in = []
                 for lp in self.all_products_raw:
@@ -1740,10 +1809,10 @@ class StockApp(MDApp):
                     if bc and bc in target_barcodes_map:
                         rp = target_barcodes_map[bc]
                         mapped_out = lp.copy()
-                        mapped_out['remote_id'] = rp.get('id')
+                        mapped_out['barcode'] = bc
                         filtered_local_products_out.append(mapped_out)
                         mapped_in = lp.copy()
-                        mapped_in['remote_id'] = rp.get('id')
+                        mapped_in['barcode'] = bc
                         mapped_in['stock'] = rp.get('stock', 0)
                         if 'real_stock_store' in rp:
                             mapped_in['real_stock_store'] = rp.get('real_stock_store', 0)
@@ -1762,14 +1831,14 @@ class StockApp(MDApp):
                 def update_ui():
                     if not final_list:
                         if not is_from_cache:
-                            self.notify('Aucun produit commun (Code-barres manquant).', 'error')
+                            self.notify('Aucun produit commun trouvé (Même Code-barres).', 'error')
                     elif is_from_cache:
-                        msg = 'Lecture (Cache) : Ajout au panier bloqué.'
-                        self.notify(f'{len(final_list)} Produits. {msg}', 'warning')
+                        msg = 'Mode Lecture (Cache) : Ajout bloqué.'
+                        self.notify(f'{len(final_list)} Produits compatibles.', 'warning')
                     else:
                         self.is_remote_live_data = True
-                        msg = 'Stock synchronisé avec le magasin cible !'
-                        self.notify(f'{len(final_list)} Produits. {msg}', 'success')
+                        msg = 'Seuls les produits avec Code-Barres identique sont affichés !'
+                        self.notify(f'{len(final_list)} Produits synchronisés.', 'success')
                     self.prepare_products_for_rv(final_list)
                 update_ui()
             except Exception as e:
@@ -1796,8 +1865,6 @@ class StockApp(MDApp):
                     if isinstance(res_json, dict):
                         if 'data' in res_json and isinstance(res_json['data'], list):
                             target_prods = res_json['data']
-                        elif 'products' in res_json and isinstance(res_json['products'], list):
-                            target_prods = res_json['products']
                         else:
                             target_prods = list(res_json.values())
                     elif isinstance(res_json, list):
@@ -1805,31 +1872,12 @@ class StockApp(MDApp):
                     if target_prods:
                         remote_cache.put(cache_key, products=target_prods, timestamp=time.time())
                         process_and_display_products(target_prods, is_from_cache=False)
-                    elif not has_cache:
-
-                        @mainthread
-                        def show_empty_err():
-                            self.notify('Le magasin distant est vide.', 'warning')
-                        show_empty_err()
                 elif not has_cache:
 
                     @mainthread
-                    def show_http_err():
+                    def show_err():
                         self.notify(f'Erreur serveur: {response.status_code}', 'error')
-                    show_http_err()
-            except requests.exceptions.RequestException:
-                if not has_cache:
-
-                    @mainthread
-                    def show_req_err():
-                        self.notify('Connexion échouée. Aucune donnée locale.', 'error')
-                    show_req_err()
-                else:
-
-                    @mainthread
-                    def show_offline_msg():
-                        self.notify('Réseau faible. Modification impossible avec le cache.', 'error')
-                    show_offline_msg()
+                    show_err()
             except Exception as e:
                 pass
         threading.Thread(target=fetch_worker, daemon=True).start()
@@ -6262,7 +6310,7 @@ class StockApp(MDApp):
                 found = True
                 break
         if not found:
-            new_item = {'id': product['id'], 'name': product['name'], 'price': final_price, 'qty': qty, 'original_unit_price': original_unit_price, 'special_prices': specials, 'has_promo': product.get('has_promo', False)}
+            new_item = {'id': product['id'], 'name': product['name'], 'price': final_price, 'qty': qty, 'original_unit_price': original_unit_price, 'special_prices': specials, 'has_promo': product.get('has_promo', False), 'barcode': str(product.get('barcode', '')).strip()}
             if product.get('product_ref'):
                 new_item['product_ref'] = product.get('product_ref')
             if product.get('remote_id'):
@@ -6316,9 +6364,13 @@ class StockApp(MDApp):
                 if isinstance(cached_data, list):
                     for p in cached_data:
                         if str(p.get('id')) == product_id:
-                            restored_product = p
+                            restored_product = p.copy()
                             break
             if restored_product:
+                if item.get('remote_id'):
+                    restored_product['remote_id'] = item.get('remote_id')
+                if item.get('barcode'):
+                    restored_product['barcode'] = item.get('barcode')
                 if isinstance(self.all_products_raw, list):
                     if not any((str(p.get('id')) == product_id for p in self.all_products_raw)):
                         self.all_products_raw.append(restored_product)
