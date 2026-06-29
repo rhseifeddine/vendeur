@@ -1027,7 +1027,7 @@ class StockApp(MDApp):
         if getattr(self, 'is_transaction_in_progress', False):
             return
         if not self.cart and (not getattr(self, 'exchange_sent_cart', [])):
-            self.notify('Les paniers sont vides !', 'error')
+            self.notify('Le panier est vide !', 'error')
             return
         if getattr(self, 'pay_dialog', None):
             self.pay_dialog.dismiss()
@@ -1072,7 +1072,7 @@ class StockApp(MDApp):
                 if not item_barcode:
                     validation_error = True
                     bad_product_name = str(item.get('name', 'Article'))
-                    bad_reason = "Ce produit n'a aucun Code-Barres !"
+                    bad_reason = "Ce produit n'a pas de Code-Barres."
                     return []
                 prod_id = None
                 if is_remote:
@@ -1081,7 +1081,7 @@ class StockApp(MDApp):
                     else:
                         validation_error = True
                         bad_product_name = str(item.get('name', 'Article'))
-                        bad_reason = f"Code-Barres ({item_barcode}) introuvable dans l'autre magasin."
+                        bad_reason = f"L'autre magasin ne connait pas ce produit."
                         return []
                 elif item_barcode in local_catalog_by_barcode:
                     prod_id = local_catalog_by_barcode[item_barcode]
@@ -1090,7 +1090,7 @@ class StockApp(MDApp):
                 if not prod_id:
                     validation_error = True
                     bad_product_name = str(item.get('name', 'Article'))
-                    bad_reason = 'Erreur de correspondance interne.'
+                    bad_reason = "Problème d'identification du produit."
                     return []
                 payload.append({'id': prod_id, 'qty': float(item.get('qty', 0)), 'price': float(item.get('price', 0)), 'tva': float(item.get('tva', 0)), 'name': str(item.get('name', ''))})
             return payload
@@ -1140,7 +1140,7 @@ class StockApp(MDApp):
             self.is_transaction_in_progress = False
             from kivymd.uix.dialog import MDDialog
             from kivymd.uix.button import MDFlatButton
-            self.dialog = MDDialog(title='Rejet (Non-Conforme)', text=f"Le produit:\n[b]{bad_product_name}[/b]\n\n{bad_reason}\n\nL'opération a été bloquée pour protéger les serveurs.", buttons=[MDFlatButton(text='OK', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
+            self.dialog = MDDialog(title='Opération Bloquée', text=f'Le produit:\n[b]{bad_product_name}[/b]\n\n{bad_reason}\n\nVeuillez synchroniser les articles entre les magasins pour régler ce problème.', buttons=[MDFlatButton(text='COMPRIS', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
             self.dialog.open()
             return
         remote_url = self.target_remote_url
@@ -1209,14 +1209,14 @@ class StockApp(MDApp):
             anim = Animation(opacity=1, font_size=dp(100), d=0.4, t='out_back')
             anim.start(self.sync_icon)
             self.sync_modal_title.text = 'Opération Réussie !'
-            self.sync_status_label.text = 'Toutes les données sont synchronisées.'
+            self.sync_status_label.text = 'Les deux magasins sont à jour.'
             self.sync_status_label.theme_text_color = 'Secondary'
 
             def finish_all(dt):
                 if getattr(self, 'sync_modal', None):
                     self.sync_modal.dismiss()
                 self.is_transaction_in_progress = False
-                self.notify('Opération multi-magasins réussie avec succès ✅', 'success')
+                self.notify('Transfert terminé avec succès ✅', 'success')
                 self.cart = []
                 self.exchange_sent_cart = []
                 self.update_cart_button()
@@ -1226,12 +1226,12 @@ class StockApp(MDApp):
         current_req = reqs[idx]
         total_steps = len(reqs)
         current_step = idx + 1
-        target_str = 'Magasin Local' if current_req['type'] == 'local' else 'Magasin Distant'
+        target_str = 'votre magasin' if current_req['type'] == 'local' else 'le magasin distant'
         self.sync_spinner.active = True
         self.sync_spinner.opacity = 1
         self.sync_icon.opacity = 0
         self.sync_modal_title.text = f'Étape {current_step}/{total_steps}'
-        self.sync_status_label.text = f'Envoi vers {target_str}...'
+        self.sync_status_label.text = f'Envoi des données vers {target_str}...'
         self.sync_status_label.theme_text_color = 'Secondary'
 
         def worker_thread():
@@ -1241,34 +1241,32 @@ class StockApp(MDApp):
                     local_pin = self.store.get('config').get('server_pin', '')
                     if local_pin:
                         final_headers['X-Server-PIN'] = str(local_pin)
-            final_headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MagProMobile/1.0'
+            final_headers['User-Agent'] = 'MagProMobile/Android'
             final_headers['Accept'] = 'application/json'
             try:
-                res = requests.post(current_req['url'], json=current_req['payload'], headers=final_headers, timeout=30.0, verify=False)
-                if res.status_code == 200:
+                res = requests.post(current_req['url'], json=current_req['payload'], headers=final_headers, timeout=35.0, verify=False, allow_redirects=False)
+                if res.status_code in [200, 201]:
                     try:
                         result = res.json()
                         if result.get('status') == 'success':
                             Clock.schedule_once(lambda dt: handle_success(result), 0)
                         else:
                             error_msg = result.get('message', 'Refusé par le serveur.')
-                            Clock.schedule_once(lambda dt: handle_fail(error_msg), 0)
+                            Clock.schedule_once(lambda dt: handle_fail(f'Opération refusée : {error_msg}'), 0)
                     except:
-                        Clock.schedule_once(lambda dt: handle_fail('Réponse invalide du serveur.'), 0)
+                        Clock.schedule_once(lambda dt: handle_fail('Le serveur a répondu de manière incompréhensible.'), 0)
+                elif res.status_code == 405:
+                    Clock.schedule_once(lambda dt: handle_fail("Erreur 405: L'adresse du magasin est incorrecte ou redirige vers un lien bloqué."), 0)
+                elif res.status_code in [301, 302, 307, 308]:
+                    Clock.schedule_once(lambda dt: handle_fail("Problème de lien (Redirection). Vérifiez l'adresse web du magasin."), 0)
                 else:
-                    err_txt = f'Erreur Serveur ({res.status_code})'
-                    try:
-                        err_json = res.json()
-                        err_txt += f"\n{err_json.get('message', '')}"
-                    except:
-                        pass
-                    Clock.schedule_once(lambda dt: handle_fail(err_txt), 0)
+                    Clock.schedule_once(lambda dt: handle_fail(f'Erreur du serveur (Code {res.status_code}). Veuillez réessayer.'), 0)
             except requests.exceptions.Timeout:
-                Clock.schedule_once(lambda dt: handle_fail('Connexion réseau très lente (Délai dépassé).'), 0)
+                Clock.schedule_once(lambda dt: handle_fail('La connexion Internet est trop lente ou coupée.'), 0)
             except requests.exceptions.ConnectionError:
-                Clock.schedule_once(lambda dt: handle_fail("Pas d'internet ou le magasin cible est hors ligne."), 0)
+                Clock.schedule_once(lambda dt: handle_fail('Impossible de joindre le magasin. Vérifiez votre Wifi ou 4G.'), 0)
             except Exception as e:
-                Clock.schedule_once(lambda dt: handle_fail(f'Erreur: {str(e)[:40]}'), 0)
+                Clock.schedule_once(lambda dt: handle_fail("Une erreur inattendue s'est produite lors de l'envoi."), 0)
 
         def handle_success(result):
             current_req['server_id'] = result.get('server_id')
@@ -1282,8 +1280,8 @@ class StockApp(MDApp):
             self.sync_icon.text_color = (0.8, 0.1, 0.1, 1)
             self.sync_icon.font_size = '70sp'
             self.sync_icon.opacity = 1
-            self.sync_modal_title.text = 'Erreur de Connexion'
-            self.sync_status_label.text = f'Échec vers {target_str}.\n{error_msg}'
+            self.sync_modal_title.text = 'Problème de Connexion'
+            self.sync_status_label.text = f'{error_msg}'
             self.sync_status_label.theme_text_color = 'Error'
             self.sync_btn_box.height = dp(50)
             self.sync_btn_box.opacity = 1
@@ -1314,8 +1312,8 @@ class StockApp(MDApp):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.sync_btn_cancel.disabled = True
         self.sync_btn_retry.disabled = True
-        self.sync_modal_title.text = 'Annulation en cours...'
-        self.sync_status_label.text = 'Nettoyage des opérations. Ne fermez pas...'
+        self.sync_modal_title.text = 'Annulation...'
+        self.sync_status_label.text = 'Nettoyage en cours. Veuillez ne pas fermer...'
         self.sync_status_label.theme_text_color = 'Error'
         self.sync_spinner.active = True
         self.sync_spinner.opacity = 1
@@ -1335,14 +1333,13 @@ class StockApp(MDApp):
                     del_url = f'{base_url}/api/delete_transaction'
                     is_tr = r['doc_type'] == 'TR'
                     payload = {'server_id': r['server_id'], 'is_transfer': is_tr}
-                    res = requests.post(del_url, json=payload, headers=r['headers'], timeout=8.0, verify=False)
+                    res = requests.post(del_url, json=payload, headers=r['headers'], timeout=10.0, verify=False)
                     if res.status_code == 200 and res.json().get('status') == 'success':
                         success_count += 1
                         r['server_id'] = None
                     else:
                         fail_count += 1
                 except Exception as e:
-                    print(f'[Rollback Error] {e}')
                     fail_count += 1
             Clock.schedule_once(lambda dt: self._finish_rollback(success_count, fail_count), 0)
         threading.Thread(target=rollback_worker, daemon=True).start()
@@ -1673,21 +1670,21 @@ class StockApp(MDApp):
         from datetime import datetime
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         i, srv = item
-        local_ip = srv.get('local_ip', '').strip()
-        ext_ip = srv.get('ext_ip', '').strip()
+        local_ip = str(srv.get('local_ip', '')).strip()
+        ext_ip = str(srv.get('ext_ip', '')).strip()
         urls_to_test = []
         for ip in [ext_ip, local_ip]:
             if not ip:
                 continue
-            if 'http' in ip:
-                urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
-            elif re.search('[a-zA-Z]', ip):
-                urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
-                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
-            elif ':' in ip:
-                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+            clean_ip = ip.rstrip('/')
+            if clean_ip.startswith('http'):
+                urls_to_test.append(f'{clean_ip}/api/ping')
+            elif re.search('[a-zA-Z]', clean_ip):
+                urls_to_test.append(f'https://{clean_ip}/api/ping')
+                urls_to_test.append(f'http://{clean_ip}/api/ping')
             else:
-                urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
+                urls_to_test.append(f'http://{clean_ip}:{DEFAULT_PORT}/api/ping')
+                urls_to_test.append(f'http://{clean_ip}/api/ping')
         is_online = False
         working_url = ''
         headers = {'Accept': 'application/json'}
@@ -1695,10 +1692,11 @@ class StockApp(MDApp):
             headers['X-Server-PIN'] = str(srv.get('pin'))
         for test_url in urls_to_test:
             try:
-                res = requests.get(test_url, headers=headers, timeout=1.5, verify=False)
+                res = requests.get(test_url, headers=headers, timeout=2.5, verify=False, allow_redirects=True)
                 if res.status_code == 200:
                     is_online = True
-                    working_url = test_url.replace('/api/ping', '/api/submit_order')
+                    final_url = res.url
+                    working_url = final_url.replace('/api/ping', '/api/submit_order')
                     break
             except:
                 continue
@@ -1708,7 +1706,7 @@ class StockApp(MDApp):
                 today_str = str(datetime.now().date())
                 base_api_url = working_url.replace('/api/submit_order', '')
                 stats_url = f'{base_api_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
-                res_stats = requests.get(stats_url, headers=headers, timeout=2.0, verify=False)
+                res_stats = requests.get(stats_url, headers=headers, timeout=2.5, verify=False)
                 if res_stats.status_code == 200:
                     data = res_stats.json().get('data', {})
                     debt_val = float(data.get('supplier_debts', 0))
