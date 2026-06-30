@@ -1045,7 +1045,16 @@ class StockApp(MDApp):
                 import os
                 from kivy.storage.jsonstore import JsonStore
                 cache_file = os.path.join(self.user_data_dir, 'remote_stores_cache.json')
-                remote_cache = JsonStore(cache_file)
+                try:
+                    remote_cache = JsonStore(cache_file)
+                except Exception as e:
+                    print(f'[CORRUPTION DETECTED] Resetting remote_stores_cache.json in submit due to error: {e}')
+                    try:
+                        if os.path.exists(cache_file):
+                            os.remove(cache_file)
+                    except:
+                        pass
+                    remote_cache = JsonStore(cache_file)
                 t_name = self.target_remote_server.get('name', 'Inconnu')
                 c_key = f"store_{t_name.replace(' ', '_')}"
                 if remote_cache.exists(c_key):
@@ -1783,7 +1792,16 @@ class StockApp(MDApp):
         from kivy.clock import mainthread
         from kivy.storage.jsonstore import JsonStore
         cache_file = os.path.join(self.user_data_dir, 'remote_stores_cache.json')
-        remote_cache = JsonStore(cache_file)
+        try:
+            remote_cache = JsonStore(cache_file)
+        except Exception as e:
+            print(f'[CORRUPTION DETECTED] Resetting remote_stores_cache.json due to error: {e}')
+            try:
+                if os.path.exists(cache_file):
+                    os.remove(cache_file)
+            except:
+                pass
+            remote_cache = JsonStore(cache_file)
         target_name = self.target_remote_server.get('name', 'Inconnu')
         cache_key = f"store_{target_name.replace(' ', '_')}"
         try:
@@ -2561,9 +2579,15 @@ class StockApp(MDApp):
                 try:
                     if os.path.exists(path):
                         os.remove(path)
-                except:
-                    pass
-                return JsonStore(path)
+                except Exception as del_err:
+                    print(f'Failed to delete corrupted file: {del_err}')
+                try:
+                    return JsonStore(path)
+                except Exception:
+                    import tempfile
+                    fallback_path = os.path.join(tempfile.gettempdir(), f'fallback_{filename}')
+                    print(f'Using fallback temporary storage: {fallback_path}')
+                    return JsonStore(fallback_path)
         self.offline_store = load_safe_store('stock_pending_orders.json')
         self.cache_store = load_safe_store('stock_cache.json')
         self.stats_store = load_safe_store('local_stats.json')
@@ -3503,6 +3527,9 @@ class StockApp(MDApp):
             grid2.add_widget(self._create_dash_btn('account-group', 'CLIENTS', bg_teal, col_teal, lambda x: self.open_entity_manager('account')))
             grid2.add_widget(self._create_dash_btn('truck-delivery', 'FOURNISSEURS', bg_brown, col_brown, lambda x: self.open_entity_manager('supplier')))
             self.buttons_container.add_widget(grid2)
+            grid_expenses = MDGridLayout(cols=1, spacing=dp(10), adaptive_height=True)
+            grid_expenses.add_widget(self._create_dash_btn('cash-minus', 'DÉPENSES / CHARGES', bg_red, col_red, lambda x: self.open_add_expense_dialog()))
+            self.buttons_container.add_widget(grid_expenses)
             self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', bg_catalogue, col_catalogue, self.open_catalogue_browser))
         if has_multiple_stores:
             multi_store_container = MDCard(orientation='vertical', padding=dp(12), spacing=dp(10), radius=[15], md_bg_color=(0.1, 0.15, 0.25, 1), elevation=2, size_hint_y=None, adaptive_height=True)
@@ -3578,6 +3605,83 @@ class StockApp(MDApp):
         if not self.is_seller_mode:
             if not hasattr(self, 'admin_start_date') or not self.admin_start_date:
                 self.filter_admin_stats(day_offset=0)
+
+    def open_add_expense_dialog(self):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.textfield import MDTextField
+        from kivymd.uix.menu import MDDropdownMenu
+        from kivy.metrics import dp
+        content = MDBoxLayout(orientation='vertical', spacing=dp(15), size_hint_y=None, height=dp(250))
+        self.expense_amount_field = MDTextField(hint_text='Montant (DA)', input_filter='float', font_size='20sp')
+        self.expense_cat_field = MDTextField(hint_text='Catégorie', text='Autre', readonly=True, icon_right='menu-down')
+        self.expense_desc_field = SmartTextField(hint_text='Détails / Note (Optionnel)')
+        content.add_widget(self.expense_amount_field)
+        content.add_widget(self.expense_cat_field)
+        content.add_widget(self.expense_desc_field)
+        categories = ['Électricité/Gaz', 'Loyer', 'Salaires/Avances', 'Maintenance', 'Nourriture/Boisson', 'Transport', 'Autre']
+        menu_items = [{'text': cat, 'viewclass': 'OneLineListItem', 'on_release': lambda x=cat: self._set_expense_category(x)} for cat in categories]
+        self.expense_cat_menu = MDDropdownMenu(caller=self.expense_cat_field, items=menu_items, width_mult=4, max_height=dp(250))
+
+        def on_cat_touch(instance, touch):
+            if instance.collide_point(*touch.pos):
+                self.expense_cat_menu.open()
+                return True
+            return False
+        self.expense_cat_field.bind(on_touch_down=on_cat_touch)
+        self.expense_dialog = MDDialog(title='Ajouter une Dépense', type='custom', content_cls=content, buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.expense_dialog.dismiss()), MDRaisedButton(text='VALIDER', md_bg_color=(0.8, 0, 0, 1), on_release=self.submit_expense)])
+        self.expense_dialog.open()
+
+    def _set_expense_category(self, cat_text):
+        self.expense_cat_field.text = cat_text
+        self.expense_cat_menu.dismiss()
+
+    def submit_expense(self, instance):
+        amount_str = self.expense_amount_field.text.strip()
+        cat = self.expense_cat_field.text.strip()
+        desc = self.expense_desc_field.get_value().strip()
+        if not amount_str:
+            self.notify('Veuillez saisir le montant.', 'error')
+            return
+        try:
+            amount = float(amount_str)
+            if amount <= 0:
+                raise ValueError
+        except:
+            self.notify('Montant invalide.', 'error')
+            return
+        if not cat:
+            cat = 'Autre'
+        if not desc:
+            desc = '-'
+        payload = {'amount': amount, 'category': cat, 'description': desc, 'user_name': self.current_user_name, 'timestamp': str(datetime.now())}
+        self.notify('Envoi de la dépense...', 'info')
+        if getattr(self, 'expense_dialog', None):
+            self.expense_dialog.dismiss()
+        if self.is_server_reachable:
+
+            def on_success(req, res):
+                if res.get('status') == 'success':
+                    self.notify('Dépense ajoutée avec succès ✅', 'success')
+                    self.fetch_dashboard_stats()
+                else:
+                    self.notify(f"Erreur: {res.get('message', 'Inconnue')}", 'error')
+
+            def on_fail(req, err):
+                self.save_expense_offline(payload)
+            UrlRequest(f'{self.api_base}/api/add_expense', req_body=json.dumps(payload), req_headers={'Content-type': 'application/json'}, method='POST', on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=5)
+        else:
+            self.save_expense_offline(payload)
+
+    def save_expense_offline(self, payload):
+        payload['is_expense'] = True
+        timestamp_sec = int(time.time())
+        unique_id = random.randint(1000, 9999)
+        key_name = f'{timestamp_sec}_{unique_id}_EXP'
+        self.offline_store.put(key_name, order_data=payload, synced=False, sync_timestamp=0)
+        self.notify('Hors ligne: Dépense sauvegardée localement.', 'warning')
+        self._reset_notification_state(0)
 
     def open_admin_stats_date_picker(self, instance):
         date_dialog = MDDatePicker()
@@ -4238,7 +4342,15 @@ class StockApp(MDApp):
         store_path = os.path.join(self.user_data_dir, 'remote_sync.json')
         if not os.path.exists(store_path):
             return
-        sync_store = JsonStore(store_path)
+        try:
+            sync_store = JsonStore(store_path)
+        except Exception as e:
+            print(f'[CORRUPTION DETECTED] Resetting remote_sync.json due to error: {e}')
+            try:
+                os.remove(store_path)
+            except:
+                pass
+            return
         keys = list(sync_store.keys())
         if not keys:
             return
@@ -4286,6 +4398,8 @@ class StockApp(MDApp):
                 endpoint = '/api/submit_payment'
             elif data.get('doc_type') == 'DS':
                 endpoint = '/api/submit_driver_request'
+            elif data.get('is_expense'):
+                endpoint = '/api/add_expense'
 
             def next_step(*args):
                 self.is_syncing_offline_data = False
@@ -4303,6 +4417,8 @@ class StockApp(MDApp):
                 doc_name = data.get('doc_type', 'Op')
                 if doc_name == 'DS':
                     doc_name = 'Demande Stock'
+                elif data.get('is_expense'):
+                    doc_name = 'Dépense'
                 self.notify(f'Sync OK: {doc_name}', 'success')
                 next_step()
 
@@ -6283,8 +6399,6 @@ class StockApp(MDApp):
             self.update_cart_button()
             self.notify(f'Ajouté: {new_name}', 'success')
             if hasattr(self, 'search_field') and self.search_field:
-                self.search_field.text = ''
-                self.filter_products(None, '')
                 Clock.schedule_once(lambda x: setattr(self.search_field, 'focus', True), 0.2)
             return
         found = False
@@ -6323,13 +6437,14 @@ class StockApp(MDApp):
                 self.remote_filtered_products_out = [item for item in self.remote_filtered_products_out if str(item.get('id')) != prod_id]
             if hasattr(self, 'remote_filtered_products_in') and isinstance(self.remote_filtered_products_in, list):
                 self.remote_filtered_products_in = [item for item in self.remote_filtered_products_in if str(item.get('id')) != prod_id]
-            self.load_more_products(reset=True)
+            if hasattr(self, 'rv_products') and self.rv_products:
+                self.rv_products.data = [rv_item for rv_item in self.rv_products.data if str(rv_item.get('raw_data', {}).get('id')) != prod_id]
+                self.rv_products.refresh_from_data()
         if hasattr(self, 'dialog') and self.dialog:
             self.dialog.dismiss()
         self.update_cart_button()
         self.notify('Ajouté au panier', 'success')
         if hasattr(self, 'search_field') and self.search_field:
-            self.search_field.text = ''
             Clock.schedule_once(lambda x: setattr(self.search_field, 'focus', True), 0.2)
 
     def update_cart_button(self):
