@@ -637,11 +637,37 @@ class StockApp(MDApp):
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.scrollview import MDScrollView
         from kivymd.uix.dialog import MDDialog
-        from kivymd.uix.button import MDRaisedButton, MDFlatButton
+        from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDIconButton
         from kivy.metrics import dp
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing=dp(15), padding=[0, dp(10), 0, 0])
-        info_label = MDLabel(text='Sélectionnez les magasins à synchroniser.\nLe système va unifier les produits (Articles) via Code-Barre.', theme_text_color='Secondary', font_style='Caption', halign='center', adaptive_height=True)
-        content.add_widget(info_label)
+
+        def trigger_sync_refresh(x=None):
+            if getattr(self, 'is_refreshing_sync', False):
+                return
+            self.is_refreshing_sync = True
+            if hasattr(self, 'btn_refresh_sync'):
+                self.btn_refresh_sync.disabled = True
+                self.btn_refresh_sync.theme_text_color = 'Hint'
+            if hasattr(self, 'btn_start_sync'):
+                self.btn_start_sync.disabled = True
+            for idx, lbl in self.sync_status_labels.items():
+                lbl.text = 'Vérification...'
+                lbl.theme_text_color = 'Hint'
+                icon = self.sync_status_icons.get(idx)
+                if icon:
+                    icon.icon = 'timer-sand'
+                    icon.theme_text_color = 'Hint'
+                chk = self.sync_checkboxes.get(idx)
+                if chk:
+                    chk.disabled = True
+            self._check_sync_connections()
+        header_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(10))
+        info_label = MDLabel(text='Sélectionnez les magasins à synchroniser.\nLe système va unifier les produits (Articles).', theme_text_color='Secondary', font_style='Caption', halign='left', size_hint_x=0.85)
+        self.btn_refresh_sync = MDIconButton(icon='refresh', theme_text_color='Custom', text_color=self.theme_cls.primary_color, pos_hint={'center_y': 0.5})
+        self.btn_refresh_sync.bind(on_release=trigger_sync_refresh)
+        header_row.add_widget(info_label)
+        header_row.add_widget(self.btn_refresh_sync)
+        content.add_widget(header_row)
         scroll = MDScrollView(size_hint_y=None, height=dp(450))
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
         indexed_servers = list(enumerate(self.sync_servers_list))
@@ -655,7 +681,7 @@ class StockApp(MDApp):
             card.add_widget(chk)
             txt_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
             lbl_name = MDLabel(text=srv_name, bold=True, font_style='Subtitle1', theme_text_color='Primary')
-            lbl_status = MDLabel(text='Vérification rapide...', font_style='Caption', theme_text_color='Hint')
+            lbl_status = MDLabel(text='Vérification...', font_style='Caption', theme_text_color='Hint')
             self.sync_status_labels[original_idx] = lbl_status
             txt_box.add_widget(lbl_name)
             txt_box.add_widget(lbl_status)
@@ -669,80 +695,116 @@ class StockApp(MDApp):
         self.btn_start_sync = MDRaisedButton(text='DÉMARRER LA SYNC', md_bg_color=(0.1, 0.5, 0.8, 1), disabled=True, on_release=self.execute_articles_sync)
         self.sync_articles_dialog = MDDialog(title='Synchronisation des Magasins', type='custom', content_cls=content, size_hint=(0.95, None), radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.sync_articles_dialog.dismiss()), self.btn_start_sync])
         self.sync_articles_dialog.open()
-        self._check_sync_connections()
+        trigger_sync_refresh(None)
 
+    def _check_sync_connections(self):
+        import threading
+        from kivy.clock import Clock
+        if hasattr(self, 'btn_start_sync'):
+            self.btn_start_sync.disabled = True
+        self.sync_stores_total = len(self.sync_servers_list)
+        self.sync_stores_done = 0
+        for idx, srv in enumerate(self.sync_servers_list):
+            threading.Thread(target=self._fast_sync_ping_thread, args=(idx, srv), daemon=True).start()
+
+        def force_sync_unlock(dt):
+            self.is_refreshing_sync = False
+            if hasattr(self, 'btn_refresh_sync'):
+                self.btn_refresh_sync.disabled = False
+                self.btn_refresh_sync.theme_text_color = 'Custom'
+            if hasattr(self, 'btn_start_sync'):
+                self.btn_start_sync.disabled = False
+            if hasattr(self, 'sync_status_labels'):
+                for idx, lbl in self.sync_status_labels.items():
+                    if 'Vérification' in lbl.text:
+                        self._update_sync_status_ui(idx, None, False)
+        self.sync_failsafe_event = Clock.schedule_once(force_sync_unlock, 3.5)
+
+    def _handle_sync_ping_result(self, idx, working_url, is_online):
+        self._update_sync_status_ui(idx, working_url, is_online)
+        self.sync_stores_done = getattr(self, 'sync_stores_done', 0) + 1
+        if hasattr(self, 'sync_stores_total') and self.sync_stores_done >= self.sync_stores_total:
+            self.is_refreshing_sync = False
+            if hasattr(self, 'btn_refresh_sync'):
+                self.btn_refresh_sync.disabled = False
+                self.btn_refresh_sync.theme_text_color = 'Custom'
+            if hasattr(self, 'btn_start_sync'):
+                self.btn_start_sync.disabled = False
+            if hasattr(self, 'sync_failsafe_event') and self.sync_failsafe_event:
+                self.sync_failsafe_event.cancel()
+
+    @mainthread
     def _update_sync_status_ui(self, index, working_url, is_online):
         if not hasattr(self, 'sync_articles_dialog') or not self.sync_articles_dialog:
             return
         self.sync_servers_list[index]['_working_url'] = working_url
         icon_widget = self.sync_status_icons.get(index)
         chk_widget = self.sync_checkboxes.get(index)
-        lbl_widget = getattr(self, 'sync_status_labels', {}).get(index)
+        lbl_widget = self.sync_status_labels.get(index)
         if is_online:
-            icon_widget.icon = 'wifi'
-            icon_widget.text_color = (0, 0.7, 0, 1)
-            icon_widget.theme_text_color = 'Custom'
+            if icon_widget:
+                icon_widget.icon = 'wifi'
+                icon_widget.text_color = (0, 0.7, 0, 1)
+                icon_widget.theme_text_color = 'Custom'
             if lbl_widget:
                 lbl_widget.text = 'En ligne'
                 lbl_widget.theme_text_color = 'Custom'
                 lbl_widget.text_color = (0, 0.7, 0, 1)
+            if chk_widget:
+                chk_widget.disabled = False
+                chk_widget.active = True
+                self.sync_selected_stores[index] = True
         else:
-            icon_widget.icon = 'wifi-off'
-            icon_widget.text_color = (0.8, 0, 0, 1)
-            icon_widget.theme_text_color = 'Custom'
-            chk_widget.active = False
-            chk_widget.disabled = True
-            self.sync_selected_stores[index] = False
+            if icon_widget:
+                icon_widget.icon = 'wifi-off'
+                icon_widget.text_color = (0.8, 0, 0, 1)
+                icon_widget.theme_text_color = 'Custom'
             if lbl_widget:
                 lbl_widget.text = 'Hors ligne'
                 lbl_widget.theme_text_color = 'Error'
+            if chk_widget:
+                chk_widget.active = False
+                chk_widget.disabled = True
+                self.sync_selected_stores[index] = False
 
     def _toggle_sync_store(self, index, is_active):
         self.sync_selected_stores[index] = is_active
 
-    def _check_sync_connections(self):
+    def _fast_sync_ping_thread(self, idx, srv):
         import requests
+        import re
         import urllib3
-        import concurrent.futures
         from kivy.clock import Clock
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-        def ping_store(idx, srv):
-            local_ip = str(srv.get('local_ip', '')).strip()
-            ext_ip = str(srv.get('ext_ip', '')).strip()
-            pin = str(srv.get('pin', '')).strip()
-            urls_to_test = []
-            if ext_ip:
-                urls_to_test.append(f"https://{ext_ip.replace('https://', '').replace('http://', '').strip('/')}")
-            if local_ip:
-                urls_to_test.append(f"http://{local_ip.replace('http://', '').strip('/')}:{DEFAULT_PORT}")
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MagProMobile/1.0', 'Accept': 'application/json'}
-            if pin:
-                headers['X-Server-PIN'] = pin
-            working_url = None
-            for test_url in urls_to_test:
-                try:
-                    res = requests.get(f'{test_url}/api/ping', headers=headers, timeout=3.0, verify=False)
-                    if res.status_code == 200:
-                        working_url = test_url
-                        break
-                except:
-                    continue
-            return (idx, working_url)
-
-        def worker_thread():
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                futures = [executor.submit(ping_store, i, srv) for i, srv in enumerate(self.sync_servers_list)]
-                for future in concurrent.futures.as_completed(futures):
-                    try:
-                        idx, url = future.result()
-                        is_online = url is not None
-                        Clock.schedule_once(lambda dt, i=idx, u=url, o=is_online: self._update_sync_status_ui(i, u, o), 0)
-                    except Exception:
-                        pass
-            Clock.schedule_once(lambda dt: setattr(self.btn_start_sync, 'disabled', False), 0)
-        import threading
-        threading.Thread(target=worker_thread, daemon=True).start()
+        local_ip = str(srv.get('local_ip', '')).strip()
+        ext_ip = str(srv.get('ext_ip', '')).strip()
+        pin = str(srv.get('pin', '')).strip()
+        urls_to_test = []
+        if ext_ip:
+            clean_ext = ext_ip.rstrip('/').replace('https://', '').replace('http://', '')
+            if re.search('[a-zA-Z]', clean_ext):
+                urls_to_test.extend([f'https://{clean_ext}', f'http://{clean_ext}'])
+            else:
+                urls_to_test.extend([f'http://{clean_ext}:{DEFAULT_PORT}', f'http://{clean_ext}'])
+        if local_ip:
+            clean_loc = local_ip.rstrip('/').replace('http://', '')
+            urls_to_test.extend([f'http://{clean_loc}:{DEFAULT_PORT}', f'http://{clean_loc}'])
+        headers = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36', 'Connection': 'close'}
+        if pin:
+            headers['X-Server-PIN'] = pin
+        is_online = False
+        working_url = None
+        for base_url in urls_to_test:
+            test_url = f'{base_url}/api/ping'
+            try:
+                res = requests.get(test_url, headers=headers, timeout=1.5, verify=False)
+                if res.status_code in [200, 401, 403, 405]:
+                    is_online = True
+                    working_url = base_url
+                    break
+            except:
+                continue
+        Clock.schedule_once(lambda dt: self._handle_sync_ping_result(idx, working_url, is_online), 0)
 
     def execute_articles_sync(self, instance):
         if getattr(self, 'is_syncing_articles', False):
@@ -1619,27 +1681,48 @@ class StockApp(MDApp):
         from kivymd.uix.label import MDIcon, MDLabel
         from kivymd.uix.scrollview import MDScrollView
         from kivymd.uix.dialog import MDDialog
-        from kivymd.uix.button import MDFlatButton
+        from kivymd.uix.button import MDFlatButton, MDIconButton
         from kivy.metrics import dp
+        import threading
         content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(10))
         current_server = servers[active_index] if active_index < len(servers) else {}
         current_name = current_server.get('name', 'Magasin Inconnu')
-        header_card = MDCard(orientation='horizontal', padding=dp(10), spacing=dp(15), size_hint_y=None, height=dp(60), md_bg_color=bg_color, radius=[8])
-        header_card.add_widget(MDIcon(icon='store-check', theme_text_color='Custom', text_color=theme_color, font_size='30sp', pos_hint={'center_y': 0.5}))
-        header_card.add_widget(MDLabel(text=self.fix_text(current_name), bold=True, pos_hint={'center_y': 0.5}, theme_text_color='Custom', text_color=theme_color))
-        content.add_widget(header_card)
-        scroll = MDScrollView(size_hint_y=None, height=dp(400))
-        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(4), padding=[0, dp(5), 0, dp(5)])
-        self.ping_icons = {}
-        self.remote_servers_status = {}
-        self.remote_servers_urls = {}
-        self.remote_servers_debts_labels = {}
         remote_servers = []
         for i, srv in enumerate(servers):
             if i == active_index:
                 continue
             remote_servers.append((i, srv))
         remote_servers.sort(key=lambda item: item[1].get('name', '').lower())
+
+        def trigger_transfer_refresh(x=None):
+            if getattr(self, 'is_refreshing_transfer', False):
+                return
+            self.is_refreshing_transfer = True
+            if hasattr(self, 'btn_refresh_transfer'):
+                self.btn_refresh_transfer.disabled = True
+                self.btn_refresh_transfer.theme_text_color = 'Hint'
+            for idx, lbl in self.remote_servers_debts_labels.items():
+                lbl.text = 'Recherche...'
+                lbl.text_color = (0.5, 0.5, 0.5, 1)
+                icon = self.ping_icons.get(idx)
+                if icon:
+                    icon.text_color = (0.5, 0.5, 0.5, 1)
+            self._ping_remote_servers_async(remote_servers)
+        header_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(60), spacing=dp(10))
+        header_card = MDCard(orientation='horizontal', padding=dp(10), spacing=dp(15), size_hint_x=0.85, md_bg_color=bg_color, radius=[8])
+        header_card.add_widget(MDIcon(icon='store-check', theme_text_color='Custom', text_color=theme_color, font_size='30sp', pos_hint={'center_y': 0.5}))
+        header_card.add_widget(MDLabel(text=self.fix_text(current_name), bold=True, pos_hint={'center_y': 0.5}, theme_text_color='Custom', text_color=theme_color))
+        self.btn_refresh_transfer = MDIconButton(icon='refresh', theme_text_color='Custom', text_color=self.theme_cls.primary_color, pos_hint={'center_y': 0.5})
+        self.btn_refresh_transfer.bind(on_release=trigger_transfer_refresh)
+        header_row.add_widget(header_card)
+        header_row.add_widget(self.btn_refresh_transfer)
+        content.add_widget(header_row)
+        scroll = MDScrollView(size_hint_y=None, height=dp(400))
+        list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(4), padding=[0, dp(5), 0, dp(5)])
+        self.ping_icons = {}
+        self.remote_servers_status = {}
+        self.remote_servers_urls = {}
+        self.remote_servers_debts_labels = {}
         for i, srv in remote_servers:
             display_name = srv.get('name', 'Magasin Inconnu')
             card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(55), padding=[dp(5), 0, dp(10), 0], spacing=dp(5), radius=[5], elevation=1, md_bg_color=(0.98, 0.98, 0.98, 1), ripple_behavior=True)
@@ -1658,7 +1741,7 @@ class StockApp(MDApp):
             card.add_widget(icon)
             lbl_name = MDLabel(text=self.fix_text(display_name), bold=True, font_style='Subtitle2', theme_text_color='Primary', pos_hint={'center_y': 0.5}, size_hint_x=0.45)
             card.add_widget(lbl_name)
-            lbl_debt = MDLabel(text='Recherche...', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0.8, 0.1, 0.1, 1), halign='right', pos_hint={'center_y': 0.5}, size_hint_x=0.55)
+            lbl_debt = MDLabel(text='Recherche...', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), halign='right', pos_hint={'center_y': 0.5}, size_hint_x=0.55)
             self.remote_servers_debts_labels[i] = lbl_debt
             card.add_widget(lbl_debt)
             self.remote_servers_status[i] = False
@@ -1669,71 +1752,85 @@ class StockApp(MDApp):
         content.add_widget(scroll)
         self.remote_transfer_dialog = MDDialog(title=self.fix_text(dialog_title), type='custom', content_cls=content, size_hint=(0.98, None), radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=theme_color, on_release=lambda x: self.remote_transfer_dialog.dismiss())])
         self.remote_transfer_dialog.open()
-        import threading
-        threading.Thread(target=self._ping_remote_servers_async, args=(remote_servers,), daemon=True).start()
+        trigger_transfer_refresh(None)
 
-    def _ping_single_remote_server_worker(self, item):
+    def _ping_remote_servers_async(self, remote_servers):
+        import threading
+        from kivy.clock import Clock
+        self.transfer_stores_total = len(remote_servers)
+        self.transfer_stores_done = 0
+        for item in remote_servers:
+            threading.Thread(target=self._fast_transfer_ping_thread, args=(item,), daemon=True).start()
+
+        def force_transfer_unlock(dt):
+            self.is_refreshing_transfer = False
+            if hasattr(self, 'btn_refresh_transfer'):
+                self.btn_refresh_transfer.disabled = False
+                self.btn_refresh_transfer.theme_text_color = 'Custom'
+            if hasattr(self, 'remote_servers_debts_labels'):
+                for idx, lbl in self.remote_servers_debts_labels.items():
+                    if lbl.text == 'Recherche...':
+                        self._update_remote_server_ui(idx, False, '', 0.0)
+        self.transfer_failsafe_event = Clock.schedule_once(force_transfer_unlock, 4.0)
+
+    def _handle_transfer_ping_result(self, index, is_online, working_url, debt_val):
+        self._update_remote_server_ui(index, is_online, working_url, debt_val)
+        self.transfer_stores_done = getattr(self, 'transfer_stores_done', 0) + 1
+        if hasattr(self, 'transfer_stores_total') and self.transfer_stores_done >= self.transfer_stores_total:
+            self.is_refreshing_transfer = False
+            if hasattr(self, 'btn_refresh_transfer'):
+                self.btn_refresh_transfer.disabled = False
+                self.btn_refresh_transfer.theme_text_color = 'Custom'
+            if hasattr(self, 'transfer_failsafe_event') and self.transfer_failsafe_event:
+                self.transfer_failsafe_event.cancel()
+
+    def _fast_transfer_ping_thread(self, item):
         import requests
         import re
         import urllib3
         from datetime import datetime
+        from kivy.clock import Clock
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         i, srv = item
         local_ip = str(srv.get('local_ip', '')).strip()
         ext_ip = str(srv.get('ext_ip', '')).strip()
         urls_to_test = []
-        for ip in [ext_ip, local_ip]:
-            if not ip:
-                continue
-            clean_ip = ip.rstrip('/')
-            if clean_ip.startswith('http'):
-                urls_to_test.append(f'{clean_ip}/api/ping')
-            elif re.search('[a-zA-Z]', clean_ip):
-                urls_to_test.append(f'https://{clean_ip}/api/ping')
-                urls_to_test.append(f'http://{clean_ip}/api/ping')
+        if ext_ip:
+            clean_ext = ext_ip.rstrip('/').replace('https://', '').replace('http://', '')
+            if re.search('[a-zA-Z]', clean_ext):
+                urls_to_test.extend([f'https://{clean_ext}/api/ping', f'http://{clean_ext}/api/ping'])
             else:
-                urls_to_test.append(f'http://{clean_ip}:{DEFAULT_PORT}/api/ping')
-                urls_to_test.append(f'http://{clean_ip}/api/ping')
-        is_online = False
-        working_url = ''
-        headers = {'Accept': 'application/json'}
+                urls_to_test.extend([f'http://{clean_ext}:{DEFAULT_PORT}/api/ping', f'http://{clean_ext}/api/ping'])
+        if local_ip:
+            clean_loc = local_ip.rstrip('/').replace('http://', '')
+            urls_to_test.extend([f'http://{clean_loc}:{DEFAULT_PORT}/api/ping', f'http://{clean_loc}/api/ping'])
+        headers = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36', 'Connection': 'close'}
         if srv.get('pin'):
             headers['X-Server-PIN'] = str(srv.get('pin'))
-        for test_url in urls_to_test:
+        is_online = False
+        working_url = ''
+        for url in urls_to_test:
             try:
-                res = requests.get(test_url, headers=headers, timeout=2.5, verify=False, allow_redirects=True)
-                if res.status_code == 200:
+                res = requests.get(url, headers=headers, timeout=1.5, verify=False, allow_redirects=True)
+                if res.status_code in [200, 401, 403, 405]:
                     is_online = True
-                    final_url = res.url
-                    working_url = final_url.replace('/api/ping', '/api/submit_order')
+                    working_url = res.url.replace('/api/ping', '/api/submit_order')
                     break
             except:
                 continue
         debt_val = 0.0
-        if is_online:
+        if is_online and working_url:
             try:
                 today_str = str(datetime.now().date())
                 base_api_url = working_url.replace('/api/submit_order', '')
                 stats_url = f'{base_api_url}/api/admin_stats?start_date={today_str}&end_date={today_str}'
-                res_stats = requests.get(stats_url, headers=headers, timeout=2.5, verify=False)
+                res_stats = requests.get(stats_url, headers=headers, timeout=2.0, verify=False)
                 if res_stats.status_code == 200:
                     data = res_stats.json().get('data', {})
                     debt_val = float(data.get('supplier_debts', 0))
-            except Exception as e:
+            except:
                 pass
-        return (i, is_online, working_url, debt_val)
-
-    def _ping_remote_servers_async(self, remote_servers):
-        import concurrent.futures
-        from kivy.clock import Clock
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(self._ping_single_remote_server_worker, item): item for item in remote_servers}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    i, is_online, working_url, debt_val = future.result()
-                    Clock.schedule_once(lambda dt, idx=i, online=is_online, url=working_url, debt=debt_val: self._update_remote_server_ui(idx, online, url, debt), 0)
-                except Exception as e:
-                    pass
+        Clock.schedule_once(lambda dt: self._handle_transfer_ping_result(i, is_online, working_url, debt_val), 0)
 
     @mainthread
     def _update_remote_server_ui(self, index, is_online, working_url, debt_val):
@@ -3475,25 +3572,22 @@ class StockApp(MDApp):
         if not self.buttons_container or not self.stats_card_container:
             return
         self.buttons_container.clear_widgets()
-        col_green = (0, 0.7, 0, 1)
-        col_blue = (0, 0, 0.8, 1)
-        col_purple = (0.5, 0, 0.5, 1)
-        col_red = (0.8, 0, 0, 1)
-        col_teal = (0, 0.5, 0.5, 1)
-        col_orange = (1, 0.6, 0, 1)
-        col_deep_orange = (1, 0.3, 0, 1)
-        col_brown = (0.4, 0.2, 0.1, 1)
-        col_cyan = (0, 0.6, 0.6, 1)
-        col_catalogue = (0.8, 0, 0.4, 1)
-        bg_catalogue = (1, 0.9, 0.95, 1)
-        bg_green = (0.9, 1, 0.9, 1)
-        bg_blue = (0.9, 0.95, 1, 1)
-        bg_purple = (0.95, 0.9, 1, 1)
-        bg_red = (1, 0.9, 0.9, 1)
-        bg_teal = (0.8, 1, 1, 1)
-        bg_orange = (1, 0.95, 0.8, 1)
-        bg_deep_orange = (1, 0.9, 0.8, 1)
-        bg_brown = (1, 0.85, 0.85, 1)
+        c_bv = ((0.88, 0.97, 0.9, 1), (0.1, 0.6, 0.2, 1))
+        c_ba = ((1.0, 0.94, 0.84, 1), (0.9, 0.4, 0.0, 1))
+        c_fc = ((0.88, 0.94, 1.0, 1), (0.0, 0.3, 0.7, 1))
+        c_ff = ((0.98, 0.88, 0.88, 1), (0.7, 0.1, 0.2, 1))
+        c_fp = ((0.94, 0.88, 1.0, 1), (0.5, 0.1, 0.6, 1))
+        c_dp = ((0.85, 0.97, 0.97, 1), (0.0, 0.5, 0.5, 1))
+        c_bs = ((0.95, 0.92, 0.88, 1), (0.5, 0.3, 0.1, 1))
+        c_be = ((0.9, 0.9, 0.98, 1), (0.2, 0.2, 0.7, 1))
+        c_rc = ((1.0, 0.85, 0.85, 1), (0.9, 0.0, 0.0, 1))
+        c_rf = ((1.0, 0.88, 0.95, 1), (0.8, 0.1, 0.5, 1))
+        c_tr = ((0.92, 0.94, 0.96, 1), (0.3, 0.4, 0.5, 1))
+        c_pr = ((1.0, 0.97, 0.85, 1), (0.7, 0.6, 0.0, 1))
+        c_cl = ((0.85, 0.95, 1.0, 1), (0.0, 0.6, 0.8, 1))
+        c_fo = ((0.96, 0.93, 0.9, 1), (0.6, 0.4, 0.2, 1))
+        c_de = ((0.99, 0.88, 0.88, 1), (0.8, 0.0, 0.0, 1))
+        c_ca = ((0.95, 0.85, 0.95, 1), (0.6, 0.0, 0.4, 1))
         current_sales_mode = getattr(self, 'user_sales_mode', 'store')
         is_truck_mode = current_sales_mode == 'truck'
         has_multiple_stores = False
@@ -3502,35 +3596,35 @@ class StockApp(MDApp):
             if len(servers) > 1:
                 has_multiple_stores = True
         if self.is_seller_mode:
-            self.buttons_container.add_widget(self._create_dash_btn('cart', 'VENTE (BV)', bg_green, col_green, lambda x: self.open_mode('sale')))
+            self.buttons_container.add_widget(self._create_dash_btn('cart', 'VENTE (BV)', c_bv[0], c_bv[1], lambda x: self.open_mode('sale')))
             if is_truck_mode:
                 self.buttons_container.add_widget(self._create_dash_btn('truck-delivery', 'DEMANDE STOCK', (0.8, 0.9, 1, 1), (0.1, 0.4, 0.8, 1), lambda x: self.open_mode('request_stock')))
-            self.buttons_container.add_widget(self._create_dash_btn('keyboard-return', 'RETOUR CL.', bg_red, col_red, lambda x: self.open_mode('return_sale')))
-            self.buttons_container.add_widget(self._create_dash_btn('account-group', 'CLIENTS', bg_teal, col_teal, lambda x: self.open_entity_manager('account')))
-            self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'CATALOGUE', bg_catalogue, col_catalogue, self.open_catalogue_browser))
+            self.buttons_container.add_widget(self._create_dash_btn('keyboard-return', 'RETOUR CL.', c_rc[0], c_rc[1], lambda x: self.open_mode('return_sale')))
+            self.buttons_container.add_widget(self._create_dash_btn('account-group', 'CLIENTS', c_cl[0], c_cl[1], lambda x: self.open_entity_manager('account')))
+            self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'CATALOGUE', c_ca[0], c_ca[1], self.open_catalogue_browser))
         else:
             grid = MDGridLayout(cols=2, spacing=dp(10), adaptive_height=True)
-            grid.add_widget(self._create_dash_btn('cart', 'VENTE (BV)', bg_green, col_green, lambda x: self.open_mode('sale')))
-            grid.add_widget(self._create_dash_btn('truck', 'ACHAT (BA)', bg_orange, col_orange, lambda x: self.open_mode('purchase')))
-            grid.add_widget(self._create_dash_btn('file-document', 'FACTURE (FC)', bg_blue, col_blue, lambda x: self.open_mode('invoice_sale')))
-            grid.add_widget(self._create_dash_btn('file-document-edit', 'FACT. ACHAT (FF)', bg_deep_orange, col_deep_orange, lambda x: self.open_mode('invoice_purchase')))
-            grid.add_widget(self._create_dash_btn('file-document-outline', 'PROFORMA (FP)', bg_purple, col_purple, lambda x: self.open_mode('proforma')))
-            grid.add_widget(self._create_dash_btn('clipboard-list', 'COMMANDE (DP)', bg_teal, col_cyan, lambda x: self.open_mode('order_purchase')))
-            grid.add_widget(self._create_dash_btn('tray-arrow-up', 'SORTIE (BS)', bg_brown, col_brown, lambda x: self.open_mode('stock_out')))
-            grid.add_widget(self._create_dash_btn('tray-arrow-down', 'ENTRÉE (BE)', bg_teal, col_cyan, lambda x: self.open_mode('stock_in')))
-            grid.add_widget(self._create_dash_btn('keyboard-return', 'RETOUR CL.', bg_red, col_red, lambda x: self.open_mode('return_sale')))
-            grid.add_widget(self._create_dash_btn('undo', 'RETOUR FR.', bg_blue, col_blue, lambda x: self.open_mode('return_purchase')))
-            grid.add_widget(self._create_dash_btn('transfer', 'TRANSFERT (TR)', bg_purple, col_purple, lambda x: self.open_mode('transfer')))
-            grid.add_widget(self._create_dash_btn('database-edit', 'PRODUITS', bg_blue, col_blue, lambda x: self.open_mode('manage_products')))
+            grid.add_widget(self._create_dash_btn('cart', 'VENTE (BV)', c_bv[0], c_bv[1], lambda x: self.open_mode('sale')))
+            grid.add_widget(self._create_dash_btn('truck', 'ACHAT (BA)', c_ba[0], c_ba[1], lambda x: self.open_mode('purchase')))
+            grid.add_widget(self._create_dash_btn('file-document', 'FACTURE (FC)', c_fc[0], c_fc[1], lambda x: self.open_mode('invoice_sale')))
+            grid.add_widget(self._create_dash_btn('file-document-edit', 'FACT. ACHAT (FF)', c_ff[0], c_ff[1], lambda x: self.open_mode('invoice_purchase')))
+            grid.add_widget(self._create_dash_btn('file-document-outline', 'PROFORMA (FP)', c_fp[0], c_fp[1], lambda x: self.open_mode('proforma')))
+            grid.add_widget(self._create_dash_btn('clipboard-list', 'COMMANDE (DP)', c_dp[0], c_dp[1], lambda x: self.open_mode('order_purchase')))
+            grid.add_widget(self._create_dash_btn('tray-arrow-up', 'SORTIE (BS)', c_bs[0], c_bs[1], lambda x: self.open_mode('stock_out')))
+            grid.add_widget(self._create_dash_btn('tray-arrow-down', 'ENTRÉE (BE)', c_be[0], c_be[1], lambda x: self.open_mode('stock_in')))
+            grid.add_widget(self._create_dash_btn('keyboard-return', 'RETOUR CL.', c_rc[0], c_rc[1], lambda x: self.open_mode('return_sale')))
+            grid.add_widget(self._create_dash_btn('undo', 'RETOUR FR.', c_rf[0], c_rf[1], lambda x: self.open_mode('return_purchase')))
+            grid.add_widget(self._create_dash_btn('transfer', 'TRANSFERT (TR)', c_tr[0], c_tr[1], lambda x: self.open_mode('transfer')))
+            grid.add_widget(self._create_dash_btn('database-edit', 'PRODUITS', c_pr[0], c_pr[1], lambda x: self.open_mode('manage_products')))
             self.buttons_container.add_widget(grid)
             grid2 = MDGridLayout(cols=2, spacing=dp(10), adaptive_height=True)
-            grid2.add_widget(self._create_dash_btn('account-group', 'CLIENTS', bg_teal, col_teal, lambda x: self.open_entity_manager('account')))
-            grid2.add_widget(self._create_dash_btn('truck-delivery', 'FOURNISSEURS', bg_brown, col_brown, lambda x: self.open_entity_manager('supplier')))
+            grid2.add_widget(self._create_dash_btn('account-group', 'CLIENTS', c_cl[0], c_cl[1], lambda x: self.open_entity_manager('account')))
+            grid2.add_widget(self._create_dash_btn('truck-delivery', 'FOURNISSEURS', c_fo[0], c_fo[1], lambda x: self.open_entity_manager('supplier')))
             self.buttons_container.add_widget(grid2)
             grid_expenses = MDGridLayout(cols=1, spacing=dp(10), adaptive_height=True)
-            grid_expenses.add_widget(self._create_dash_btn('cash-minus', 'DÉPENSES / CHARGES', bg_red, col_red, lambda x: self.open_add_expense_dialog()))
+            grid_expenses.add_widget(self._create_dash_btn('cash-minus', 'DÉPENSES / CHARGES', c_de[0], c_de[1], lambda x: self.open_add_expense_dialog()))
             self.buttons_container.add_widget(grid_expenses)
-            self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', bg_catalogue, col_catalogue, self.open_catalogue_browser))
+            self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', c_ca[0], c_ca[1], self.open_catalogue_browser))
         if has_multiple_stores:
             multi_store_container = MDCard(orientation='vertical', padding=dp(12), spacing=dp(10), radius=[15], md_bg_color=(0.1, 0.15, 0.25, 1), elevation=2, size_hint_y=None, adaptive_height=True)
             header_multi = MDBoxLayout(orientation='horizontal', adaptive_size=True, spacing=dp(12), pos_hint={'center_x': 0.5})
@@ -3606,20 +3700,30 @@ class StockApp(MDApp):
             if not hasattr(self, 'admin_start_date') or not self.admin_start_date:
                 self.filter_admin_stats(day_offset=0)
 
-    def open_add_expense_dialog(self):
+    def open_add_expense_dialog(self, edit_data=None):
         from kivymd.uix.dialog import MDDialog
         from kivymd.uix.button import MDFlatButton, MDRaisedButton
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.textfield import MDTextField
         from kivymd.uix.menu import MDDropdownMenu
+        from kivymd.uix.label import MDLabel
         from kivy.metrics import dp
-        content = MDBoxLayout(orientation='vertical', spacing=dp(15), size_hint_y=None, height=dp(250))
-        self.expense_amount_field = MDTextField(hint_text='Montant (DA)', input_filter='float', font_size='20sp')
-        self.expense_cat_field = MDTextField(hint_text='Catégorie', text='Autre', readonly=True, icon_right='menu-down')
-        self.expense_desc_field = SmartTextField(hint_text='Détails / Note (Optionnel)')
-        content.add_widget(self.expense_amount_field)
-        content.add_widget(self.expense_cat_field)
-        content.add_widget(self.expense_desc_field)
+        if hasattr(self, 'expense_dialog') and self.expense_dialog:
+            try:
+                self.expense_dialog.dismiss()
+            except:
+                pass
+        self.editing_expense_id = edit_data['id'] if edit_data else None
+        title_text = 'Modifier la Dépense' if edit_data else 'Nouvelle Dépense'
+        btn_action_text = 'MODIFIER' if edit_data else 'AJOUTER'
+        btn_action_color = (0.1, 0.5, 0.8, 1) if edit_data else (0, 0.7, 0.3, 1)
+        content = MDBoxLayout(orientation='vertical', spacing=dp(20), size_hint_y=None, height=dp(280), padding=[dp(10), dp(20), dp(10), 0])
+        self.expense_amount_field = MDTextField(hint_text='Montant (DA)', input_filter='float', font_size='24sp', icon_left='cash', text=str(edit_data['amount']) if edit_data else '')
+        self.expense_cat_field = MDTextField(hint_text='Catégorie', text=edit_data['category'] if edit_data else 'Autre', readonly=True, icon_right='menu-down', icon_left='tag')
+        self.expense_desc_field = SmartTextField(hint_text='Détails / Note (Optionnel)', text=edit_data['description'] if edit_data else '')
+        if edit_data and hasattr(self.expense_desc_field, '_raw_text'):
+            self.expense_desc_field._raw_text = edit_data['description']
+            self.expense_desc_field._update_display()
         categories = ['Électricité/Gaz', 'Loyer', 'Salaires/Avances', 'Maintenance', 'Nourriture/Boisson', 'Transport', 'Autre']
         menu_items = [{'text': cat, 'viewclass': 'OneLineListItem', 'on_release': lambda x=cat: self._set_expense_category(x)} for cat in categories]
         self.expense_cat_menu = MDDropdownMenu(caller=self.expense_cat_field, items=menu_items, width_mult=4, max_height=dp(250))
@@ -3630,12 +3734,149 @@ class StockApp(MDApp):
                 return True
             return False
         self.expense_cat_field.bind(on_touch_down=on_cat_touch)
-        self.expense_dialog = MDDialog(title='Ajouter une Dépense', type='custom', content_cls=content, buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.expense_dialog.dismiss()), MDRaisedButton(text='VALIDER', md_bg_color=(0.8, 0, 0, 1), on_release=self.submit_expense)])
+        content.add_widget(self.expense_amount_field)
+        content.add_widget(self.expense_cat_field)
+        content.add_widget(self.expense_desc_field)
+        if not edit_data:
+            btn_history = MDFlatButton(text="VOIR L'HISTORIQUE 📜", theme_text_color='Custom', text_color=self.theme_cls.primary_color, pos_hint={'center_x': 0.5}, on_release=self.open_expense_history_dialog)
+            content.add_widget(btn_history)
+        self.btn_submit_exp = MDRaisedButton(text=btn_action_text, md_bg_color=btn_action_color, on_release=self.submit_expense)
+        buttons = [MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.expense_dialog.dismiss()), self.btn_submit_exp]
+        self.expense_dialog = MDDialog(title=title_text, type='custom', content_cls=content, size_hint=(0.9, None), radius=[16, 16, 16, 16], buttons=buttons)
         self.expense_dialog.open()
 
     def _set_expense_category(self, cat_text):
         self.expense_cat_field.text = cat_text
         self.expense_cat_menu.dismiss()
+
+    def open_expense_history_dialog(self, instance=None):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDIconButton
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.scrollview import MDScrollView
+        from kivymd.uix.label import MDLabel
+        from kivy.metrics import dp
+        from datetime import datetime
+        if hasattr(self, 'expense_dialog') and self.expense_dialog:
+            self.expense_dialog.dismiss()
+        if hasattr(self, 'history_exp_dialog') and self.history_exp_dialog:
+            try:
+                self.history_exp_dialog.dismiss()
+            except:
+                pass
+        if not hasattr(self, 'expense_start_date'):
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            self.expense_start_date = today_str
+            self.expense_end_date = today_str
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, height=dp(550))
+        filter_row = MDBoxLayout(orientation='horizontal', spacing=dp(5), size_hint_y=None, height=dp(45), padding=[0, dp(5)])
+        self.btn_exp_start_date = MDFlatButton(text=self.expense_start_date, md_bg_color=(0.9, 0.9, 0.9, 1), size_hint_x=0.4, on_release=lambda x: self._open_exp_date_picker('start'))
+        self.btn_exp_end_date = MDFlatButton(text=self.expense_end_date, md_bg_color=(0.9, 0.9, 0.9, 1), size_hint_x=0.4, on_release=lambda x: self._open_exp_date_picker('end'))
+        btn_refresh_exp = MDIconButton(icon='refresh', md_bg_color=self.theme_cls.primary_color, theme_text_color='Custom', text_color=(1, 1, 1, 1), size_hint_x=0.2, on_release=lambda x: self.fetch_expenses_list())
+        filter_row.add_widget(self.btn_exp_start_date)
+        filter_row.add_widget(MDLabel(text='Au', halign='center', size_hint_x=0.1, bold=True))
+        filter_row.add_widget(self.btn_exp_end_date)
+        filter_row.add_widget(btn_refresh_exp)
+        content.add_widget(filter_row)
+        self.exp_scroll = MDScrollView(size_hint_y=1)
+        self.exp_list_layout = MDBoxLayout(orientation='vertical', spacing=dp(10), adaptive_height=True, padding=[dp(2), dp(10), dp(2), dp(10)])
+        self.exp_scroll.add_widget(self.exp_list_layout)
+        content.add_widget(self.exp_scroll)
+        self.lbl_exp_total = MDLabel(text='TOTAL: 0.00 DA', bold=True, font_style='H6', theme_text_color='Error', halign='right', size_hint_y=None, height=dp(30))
+        content.add_widget(self.lbl_exp_total)
+        self.history_exp_dialog = MDDialog(title='Historique des Dépenses', type='custom', content_cls=content, size_hint=(0.96, None), radius=[16, 16, 16, 16], buttons=[MDFlatButton(text='+ NOUVEAU', theme_text_color='Primary', on_release=lambda x: [self.history_exp_dialog.dismiss(), self.open_add_expense_dialog()]), MDRaisedButton(text='FERMER', md_bg_color=(0.2, 0.2, 0.2, 1), on_release=lambda x: self.history_exp_dialog.dismiss())])
+        self.history_exp_dialog.open()
+        self.fetch_expenses_list()
+
+    def _open_exp_date_picker(self, target):
+        from kivymd.uix.pickers import MDDatePicker
+        date_dialog = MDDatePicker()
+        date_dialog.bind(on_save=lambda inst, val, dr: self._on_exp_date_save(val, target))
+        date_dialog.open()
+
+    def _on_exp_date_save(self, value, target):
+        date_str = str(value)
+        if target == 'start':
+            self.expense_start_date = date_str
+            self.btn_exp_start_date.text = date_str
+        else:
+            self.expense_end_date = date_str
+            self.btn_exp_end_date.text = date_str
+        self.fetch_expenses_list()
+
+    def fetch_expenses_list(self):
+        if not self.is_server_reachable:
+            self.exp_list_layout.clear_widgets()
+            from kivymd.uix.label import MDLabel
+            self.exp_list_layout.add_widget(MDLabel(text='Historique indisponible hors ligne.', halign='center', theme_text_color='Hint'))
+            return
+        self.exp_list_layout.clear_widgets()
+        url = f'{self.api_base}/api/get_expenses?start_date={self.expense_start_date}&end_date={self.expense_end_date}'
+
+        def on_success(req, res):
+            if res.get('status') == 'success':
+                data = res.get('data', [])
+                total = 0.0
+                from kivymd.uix.card import MDCard
+                from kivymd.uix.boxlayout import MDBoxLayout
+                from kivymd.uix.label import MDLabel, MDIcon
+                from kivymd.uix.button import MDIconButton
+                from kivy.metrics import dp
+                for item in data:
+                    total += item['amount']
+                    card = MDCard(orientation='horizontal', padding=dp(12), spacing=dp(10), size_hint_y=None, height=dp(85), radius=[12], md_bg_color=(1, 1, 1, 1), elevation=1)
+                    icon_box = MDBoxLayout(size_hint_x=None, width=dp(40), pos_hint={'center_y': 0.5})
+                    icon_box.add_widget(MDIcon(icon='cash-minus', theme_text_color='Custom', text_color=(0.8, 0.2, 0.2, 1), font_size='30sp', pos_hint={'center_y': 0.5}))
+                    card.add_widget(icon_box)
+                    info_box = MDBoxLayout(orientation='vertical', size_hint_x=0.7)
+                    info_box.add_widget(MDLabel(text=f"{item['category']}  -  {item['amount']} DA", font_style='Subtitle1', bold=True, theme_text_color='Primary'))
+                    info_box.add_widget(MDLabel(text=self.fix_text(item['description']), font_style='Caption', theme_text_color='Secondary', shorten=True))
+                    info_box.add_widget(MDLabel(text=f"{item['date']} | {item['user']}", font_style='Caption', theme_text_color='Hint'))
+                    card.add_widget(info_box)
+                    action_box = MDBoxLayout(orientation='vertical', size_hint_x=None, width=dp(40), spacing=dp(5))
+                    btn_edit = MDIconButton(icon='pencil-outline', theme_text_color='Custom', text_color=(0.1, 0.5, 0.8, 1), icon_size='22sp')
+                    btn_edit.bind(on_release=lambda x, i=item: self.prepare_edit_expense(i))
+                    btn_del = MDIconButton(icon='trash-can-outline', theme_text_color='Custom', text_color=(0.8, 0, 0, 1), icon_size='22sp')
+                    btn_del.bind(on_release=lambda x, eid=item['id']: self.confirm_delete_expense(eid))
+                    action_box.add_widget(btn_edit)
+                    action_box.add_widget(btn_del)
+                    card.add_widget(action_box)
+                    self.exp_list_layout.add_widget(card)
+                self.lbl_exp_total.text = f'TOTAL: {total:,.2f} DA'.replace(',', ' ')
+                if not data:
+                    self.exp_list_layout.add_widget(MDLabel(text='Aucune dépense trouvée pour cette période.', halign='center', theme_text_color='Hint'))
+            else:
+                self.notify('Erreur de chargement', 'error')
+
+        def on_fail(req, err):
+            self.notify('Erreur réseau', 'error')
+        UrlRequest(url, on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=5)
+
+    def prepare_edit_expense(self, item):
+        if hasattr(self, 'history_exp_dialog') and self.history_exp_dialog:
+            self.history_exp_dialog.dismiss()
+        self.open_add_expense_dialog(edit_data=item)
+
+    def confirm_delete_expense(self, exp_id):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        if hasattr(self, 'del_exp_dialog') and self.del_exp_dialog:
+            self.del_exp_dialog.dismiss()
+
+        def do_delete(x):
+            self.del_exp_dialog.dismiss()
+            payload = {'id': exp_id}
+
+            def on_success(req, res):
+                if res.get('status') == 'success':
+                    self.notify('Dépense supprimée', 'success')
+                    self.fetch_expenses_list()
+                    self.fetch_dashboard_stats()
+                else:
+                    self.notify('Erreur suppression', 'error')
+            UrlRequest(f'{self.api_base}/api/delete_expense', req_body=json.dumps(payload), req_headers={'Content-type': 'application/json'}, method='POST', on_success=on_success, timeout=5)
+        self.del_exp_dialog = MDDialog(title='Confirmer', text='Voulez-vous vraiment supprimer cette dépense ?\nCette action est irréversible.', buttons=[MDFlatButton(text='NON', on_release=lambda x: self.del_exp_dialog.dismiss()), MDRaisedButton(text='SUPPRIMER', md_bg_color=(0.8, 0, 0, 1), on_release=do_delete)])
+        self.del_exp_dialog.open()
 
     def submit_expense(self, instance):
         amount_str = self.expense_amount_field.text.strip()
@@ -3655,27 +3896,50 @@ class StockApp(MDApp):
             cat = 'Autre'
         if not desc:
             desc = '-'
-        payload = {'amount': amount, 'category': cat, 'description': desc, 'user_name': self.current_user_name, 'timestamp': str(datetime.now())}
-        self.notify('Envoi de la dépense...', 'info')
-        if getattr(self, 'expense_dialog', None):
-            self.expense_dialog.dismiss()
+        if getattr(self, 'editing_expense_id', None):
+            payload = {'id': self.editing_expense_id, 'amount': amount, 'category': cat, 'description': desc}
+            url = f'{self.api_base}/api/update_expense'
+        else:
+            payload = {'amount': amount, 'category': cat, 'description': desc, 'user_name': self.current_user_name, 'timestamp': str(datetime.now())}
+            url = f'{self.api_base}/api/add_expense'
+        self.notify('Envoi en cours...', 'info')
+        self.btn_submit_exp.disabled = True
         if self.is_server_reachable:
 
             def on_success(req, res):
+                self.btn_submit_exp.disabled = False
                 if res.get('status') == 'success':
-                    self.notify('Dépense ajoutée avec succès ✅', 'success')
+                    self.notify('Opération réussie ✅', 'success')
                     self.fetch_dashboard_stats()
+                    if hasattr(self, 'expense_dialog') and self.expense_dialog:
+                        self.expense_dialog.dismiss()
+                    if getattr(self, 'editing_expense_id', None):
+                        self.open_expense_history_dialog()
                 else:
                     self.notify(f"Erreur: {res.get('message', 'Inconnue')}", 'error')
 
             def on_fail(req, err):
-                self.save_expense_offline(payload)
-            UrlRequest(f'{self.api_base}/api/add_expense', req_body=json.dumps(payload), req_headers={'Content-type': 'application/json'}, method='POST', on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=5)
+                self.btn_submit_exp.disabled = False
+                if not getattr(self, 'editing_expense_id', None):
+                    self.save_expense_offline(payload)
+                    if hasattr(self, 'expense_dialog') and self.expense_dialog:
+                        self.expense_dialog.dismiss()
+                else:
+                    self.notify('Modification impossible hors ligne', 'error')
+            UrlRequest(url, req_body=json.dumps(payload), req_headers={'Content-type': 'application/json'}, method='POST', on_success=on_success, on_failure=on_fail, on_error=on_fail, timeout=5)
         else:
-            self.save_expense_offline(payload)
+            self.btn_submit_exp.disabled = False
+            if not getattr(self, 'editing_expense_id', None):
+                self.save_expense_offline(payload)
+                if hasattr(self, 'expense_dialog') and self.expense_dialog:
+                    self.expense_dialog.dismiss()
+            else:
+                self.notify('Modification impossible hors ligne', 'error')
 
     def save_expense_offline(self, payload):
         payload['is_expense'] = True
+        import time
+        import random
         timestamp_sec = int(time.time())
         unique_id = random.randint(1000, 9999)
         key_name = f'{timestamp_sec}_{unique_id}_EXP'
@@ -4163,56 +4427,53 @@ class StockApp(MDApp):
         self.del_conf_dialog.open()
 
     def check_server_heartbeat(self, dt):
-        if self.sync_paused:
+        if getattr(self, 'sync_paused', False):
             self.is_server_reachable = False
-            if self.status_bar_label:
+            if hasattr(self, 'status_bar_label'):
                 self.status_bar_label.text = 'Synchronisation Arrêtée (PAUSE)'
                 self.status_bar_bg.md_bg_color = (0.8, 0, 0, 1)
             return
-        self._ping_local()
+        import threading
+        threading.Thread(target=self._fast_heartbeat_worker, daemon=True).start()
 
-    def _ping_local(self):
-        if not self.local_server_ip:
-            self._ping_external()
-            return
-        url = f'http://{self.local_server_ip}:{DEFAULT_PORT}/api/ping'
-        threading.Thread(target=self._perform_ping_request, args=(url, True, self.local_server_ip), daemon=True).start()
-
-    def _ping_external(self):
-        if not self.external_server_ip:
-            self._finalize_ping_ui(False, 0, None)
-            return
-        import re
-        if re.search('[a-zA-Z]', self.external_server_ip):
-            clean_host = self.external_server_ip.replace('https://', '').replace('http://', '').strip('/')
-            url = f'https://{clean_host}/api/ping'
-        else:
-            url = f'http://{self.external_server_ip}:{DEFAULT_PORT}/api/ping'
-        threading.Thread(target=self._perform_ping_request, args=(url, False, self.external_server_ip), daemon=True).start()
-
-    def _perform_ping_request(self, url, is_local, confirmed_ip):
-        import time
+    def _fast_heartbeat_worker(self):
         import requests
-        if not hasattr(self, 'ping_session') or self.ping_session is None:
-            self.ping_session = requests.Session()
-            self.ping_session.headers.update({'User-Agent': 'MagProMobile/1.0'})
+        import re
+        import urllib3
+        import time
+        from kivy.clock import Clock
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        ext_ip = str(self.external_server_ip).strip()
+        loc_ip = str(self.local_server_ip).strip()
+        urls_to_test = []
+        if ext_ip:
+            clean_ext = ext_ip.rstrip('/').replace('https://', '').replace('http://', '')
+            if re.search('[a-zA-Z]', clean_ext):
+                urls_to_test.extend([f'https://{clean_ext}/api/ping', f'http://{clean_ext}/api/ping'])
+            else:
+                urls_to_test.extend([f'http://{clean_ext}:{DEFAULT_PORT}/api/ping', f'http://{clean_ext}/api/ping'])
+        if loc_ip:
+            clean_loc = loc_ip.rstrip('/').replace('http://', '')
+            urls_to_test.extend([f'http://{clean_loc}:{DEFAULT_PORT}/api/ping', f'http://{clean_loc}/api/ping'])
+        headers = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36', 'Connection': 'close'}
         start_time = time.time()
-        try:
-            res = self.ping_session.get(url, timeout=1.5)
-            if res.status_code == 200:
-                ping_val = int((time.time() - start_time) * 1000)
-                self._finalize_ping_ui(True, ping_val, confirmed_ip)
-            elif res.status_code == 403:
-                self._finalize_ping_ui(False, 0, None)
-            elif is_local:
-                self._ping_external()
-            else:
-                self._finalize_ping_ui(False, 0, None)
-        except Exception:
-            if is_local:
-                self._ping_external()
-            else:
-                self._finalize_ping_ui(False, 0, None)
+        is_online = False
+        confirmed_ip = loc_ip
+        for url in urls_to_test:
+            try:
+                res = requests.get(url, headers=headers, timeout=2.0, verify=False)
+                if res.status_code in [200, 401, 403, 405]:
+                    is_online = True
+                    clean_ext_check = ext_ip.replace('https://', '').replace('http://', '').strip('/')
+                    if clean_ext_check and clean_ext_check in url:
+                        confirmed_ip = ext_ip
+                    else:
+                        confirmed_ip = loc_ip
+                    break
+            except:
+                continue
+        ping_val = int((time.time() - start_time) * 1000)
+        Clock.schedule_once(lambda dt: self._finalize_ping_ui(is_online, ping_val, confirmed_ip), 0)
 
     @mainthread
     def _finalize_ping_ui(self, success, ping_val, confirmed_ip):
@@ -4220,8 +4481,12 @@ class StockApp(MDApp):
             self.last_ping = ping_val
             self.active_server_ip = confirmed_ip
             self._on_heartbeat_success()
+            if hasattr(self, 'login_status_icon'):
+                self.login_status_icon.text_color = (0, 0.8, 0, 1)
         else:
             self._on_heartbeat_fail_final(None, 'Connection Failed')
+            if hasattr(self, 'login_status_icon'):
+                self.login_status_icon.text_color = (0.8, 0, 0, 1)
 
     def _reset_notification_state(self, dt):
         if not self.status_bar_label:
@@ -4484,10 +4749,70 @@ class StockApp(MDApp):
                 self.do_login(None)
 
     def do_login(self, x):
-        self.notify('Connexion...', 'info')
-        url = f'{self.api_base}/api/login'
-        body = json.dumps({'username': self.username_field.get_value(), 'password': self.password_field.get_value()})
-        UrlRequest(url, req_body=body, req_headers={'Content-type': 'application/json'}, method='POST', on_success=self.login_success, on_failure=self.login_fail, on_error=self.login_error, timeout=2.5)
+        self.notify('Connexion en cours...', 'info')
+        username = self.username_field.get_value().strip()
+        password = self.password_field.get_value().strip()
+        import threading
+        threading.Thread(target=self._threaded_login_worker, args=(username, password), daemon=True).start()
+
+    def _threaded_login_worker(self, username, password):
+        import requests
+        import re
+        import urllib3
+        from kivy.clock import Clock
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        payload = {'username': username, 'password': password}
+        loc_ip = str(self.local_server_ip).strip()
+        ext_ip = str(self.external_server_ip).strip()
+        urls_to_test = []
+        if ext_ip:
+            clean_ext = ext_ip.rstrip('/').replace('https://', '').replace('http://', '')
+            if re.search('[a-zA-Z]', clean_ext):
+                urls_to_test.extend([f'https://{clean_ext}/api/login', f'http://{clean_ext}/api/login'])
+            else:
+                urls_to_test.extend([f'http://{clean_ext}:{DEFAULT_PORT}/api/login', f'http://{clean_ext}/api/login'])
+        if loc_ip:
+            clean_loc = loc_ip.rstrip('/').replace('http://', '')
+            urls_to_test.extend([f'http://{clean_loc}:{DEFAULT_PORT}/api/login', f'http://{clean_loc}/api/login'])
+        headers = {'Content-type': 'application/json', 'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36', 'Connection': 'close'}
+        if self.store.exists('servers_config'):
+            data_cfg = self.store.get('servers_config')
+            idx = data_cfg.get('active_index', 0)
+            servers = data_cfg.get('list', [])
+            if servers and idx < len(servers):
+                pin = servers[idx].get('pin', '')
+                if pin:
+                    headers['X-Server-PIN'] = str(pin)
+        success_res = None
+        winning_ip = loc_ip
+        for url in urls_to_test:
+            try:
+                res = requests.post(url, json=payload, headers=headers, timeout=5.0, verify=False)
+                if res.status_code == 200:
+                    success_res = res.json()
+                    clean_ext_check = ext_ip.replace('https://', '').replace('http://', '').strip('/')
+                    if clean_ext_check and clean_ext_check in url:
+                        winning_ip = ext_ip
+                    else:
+                        winning_ip = loc_ip
+                    break
+                elif res.status_code in [401, 403, 404]:
+                    success_res = res.json()
+                    break
+            except:
+                continue
+        if success_res:
+            Clock.schedule_once(lambda dt: self._handle_threaded_login_success(success_res, winning_ip), 0)
+        else:
+            Clock.schedule_once(lambda dt: self.login_error(None, 'Serveur inaccessible'), 0)
+
+    def _handle_threaded_login_success(self, res, winning_ip):
+        self.active_server_ip = winning_ip
+        self.is_server_reachable = True
+        if res.get('status') == 'success':
+            self.login_success(None, res)
+        else:
+            self.login_fail(None, res)
 
     def login_success(self, req, res):
         if res.get('status') == 'success':
@@ -4677,7 +5002,12 @@ class StockApp(MDApp):
                 self.btn_current_magasin.opacity = 1
                 self.btn_current_magasin.height = dp(45)
                 self.btn_current_magasin.disabled = False
-        self._ping_local()
+        if hasattr(self, 'status_bar_label') and self.status_bar_label:
+            self.status_bar_label.text = 'Vérification du réseau...'
+            self.status_bar_bg.md_bg_color = (0.8, 0.5, 0, 1)
+        if hasattr(self, 'login_status_icon') and self.login_status_icon:
+            self.login_status_icon.text_color = (0.8, 0.5, 0, 1)
+        self.check_server_heartbeat(0)
 
     def open_magasin_selector(self, instance=None):
         data = self.store.get('servers_config')
@@ -4690,9 +5020,33 @@ class StockApp(MDApp):
         from kivymd.uix.scrollview import MDScrollView
         from kivymd.uix.card import MDCard
         from kivymd.uix.label import MDIcon, MDLabel
-        from kivymd.uix.button import MDFlatButton
+        from kivymd.uix.button import MDFlatButton, MDIconButton
         from kivymd.uix.dialog import MDDialog
+        import threading
         content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(10))
+
+        def trigger_refresh(x):
+            if getattr(self, 'is_refreshing_stores', False):
+                return
+            self.is_refreshing_stores = True
+            if hasattr(self, 'btn_refresh_magasin'):
+                self.btn_refresh_magasin.disabled = True
+                self.btn_refresh_magasin.theme_text_color = 'Hint'
+            if hasattr(self, 'store_status_labels'):
+                for idx, lbl in self.store_status_labels.items():
+                    lbl.text = 'Vérification...'
+                    lbl.theme_text_color = 'Hint'
+                    icon = self.store_status_icons.get(idx)
+                    if icon:
+                        icon.icon = 'wifi-sync'
+                        icon.theme_text_color = 'Hint'
+            threading.Thread(target=self._check_stores_connection_bg, args=(servers,), daemon=True).start()
+        header_tools = MDBoxLayout(orientation='horizontal', adaptive_height=True, spacing=dp(5), padding=[0, 0, 0, dp(5)])
+        header_tools.add_widget(MDLabel(text="Mise à jour de l'état...", font_style='Caption', theme_text_color='Hint', pos_hint={'center_y': 0.5}))
+        self.btn_refresh_magasin = MDIconButton(icon='refresh', theme_text_color='Custom', text_color=self.theme_cls.primary_color, pos_hint={'center_y': 0.5})
+        self.btn_refresh_magasin.bind(on_release=trigger_refresh)
+        header_tools.add_widget(self.btn_refresh_magasin)
+        content.add_widget(header_tools)
         scroll = MDScrollView(size_hint_y=None, height=dp(450))
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(5), dp(5), dp(5)])
         self.store_status_icons = {}
@@ -4704,7 +5058,7 @@ class StockApp(MDApp):
             is_active = original_idx == active_index
             display_name = self.fix_text(srv.get('name', 'Inconnu'))
             bg_color = (0.9, 0.95, 1, 1) if is_active else (0.98, 0.98, 0.98, 1)
-            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(60), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True)
+            card = MDCard(orientation='horizontal', padding=[dp(12), dp(5), dp(15), dp(5)], spacing=dp(15), size_hint_y=None, height=dp(65), radius=[12], elevation=1, md_bg_color=bg_color, ripple_behavior=True)
             card.bind(on_release=lambda x, idx=original_idx: self._on_store_selected(idx))
             icon_status = MDIcon(icon='wifi-sync', theme_text_color='Hint', font_size='28sp', pos_hint={'center_y': 0.5})
             self.store_status_icons[original_idx] = icon_status
@@ -4724,8 +5078,7 @@ class StockApp(MDApp):
         content.add_widget(scroll)
         self.dialog_select_magasin = MDDialog(title='Choisir un Magasin', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.dialog_select_magasin.dismiss())], size_hint=(0.95, None))
         self.dialog_select_magasin.open()
-        import threading
-        threading.Thread(target=self._check_stores_connection_bg, args=(servers,), daemon=True).start()
+        trigger_refresh(None)
 
     def _ping_store_worker(self, item):
         import requests
@@ -4736,42 +5089,91 @@ class StockApp(MDApp):
         local_ip = str(srv.get('local_ip', '')).strip()
         ext_ip = str(srv.get('ext_ip', '')).strip()
         urls_to_test = []
-        for ip in [ext_ip, local_ip]:
-            if not ip:
-                continue
-            if 'http' in ip:
-                urls_to_test.append(f"{ip.rstrip('/')}/api/ping")
-            elif re.search('[a-zA-Z]', ip):
-                urls_to_test.append(f"https://{ip.rstrip('/')}/api/ping")
-                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
-            elif ':' in ip:
-                urls_to_test.append(f"http://{ip.rstrip('/')}/api/ping")
+        if ext_ip:
+            clean_ext = ext_ip.rstrip('/').replace('https://', '').replace('http://', '')
+            if re.search('[a-zA-Z]', clean_ext):
+                urls_to_test.extend([f'https://{clean_ext}/api/ping', f'http://{clean_ext}/api/ping'])
             else:
-                urls_to_test.append(f"http://{ip.rstrip('/')}:{DEFAULT_PORT}/api/ping")
-        is_online = False
-        headers = {'Accept': 'application/json'}
+                urls_to_test.extend([f'http://{clean_ext}:{DEFAULT_PORT}/api/ping', f'http://{clean_ext}/api/ping'])
+        if local_ip:
+            clean_loc = local_ip.rstrip('/').replace('http://', '')
+            urls_to_test.extend([f'http://{clean_loc}:{DEFAULT_PORT}/api/ping', f'http://{clean_loc}/api/ping'])
+        headers = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36', 'Connection': 'close'}
         for test_url in urls_to_test:
             try:
                 res = requests.get(test_url, headers=headers, timeout=1.5, verify=False)
-                if res.status_code == 200:
+                if res.status_code in [200, 401, 403, 405]:
+                    return (index, True)
+            except:
+                continue
+        for test_url in urls_to_test:
+            try:
+                res = requests.get(test_url, headers=headers, timeout=3.5, verify=False)
+                if res.status_code in [200, 401, 403, 405]:
+                    return (index, True)
+            except:
+                continue
+        return (index, False)
+
+    def _check_stores_connection_bg(self, servers):
+        from kivy.clock import Clock
+        import threading
+        self.total_stores_to_check = len(servers)
+        self.verified_stores_count = 0
+        for index, srv in enumerate(servers):
+            threading.Thread(target=self._fast_ping_thread, args=(index, srv), daemon=True).start()
+
+        def force_unlock_ui(dt):
+            self.is_refreshing_stores = False
+            if hasattr(self, 'btn_refresh_magasin'):
+                self.btn_refresh_magasin.disabled = False
+                self.btn_refresh_magasin.theme_text_color = 'Custom'
+            if hasattr(self, 'store_status_labels'):
+                for idx, lbl in self.store_status_labels.items():
+                    if lbl.text == 'Vérification...':
+                        self._update_store_status_ui(idx, False)
+        self.force_unlock_event = Clock.schedule_once(force_unlock_ui, 3.5)
+
+    def _handle_ping_result(self, index, is_online):
+        self._update_store_status_ui(index, is_online)
+        self.verified_stores_count = getattr(self, 'verified_stores_count', 0) + 1
+        if hasattr(self, 'total_stores_to_check') and self.verified_stores_count >= self.total_stores_to_check:
+            self.is_refreshing_stores = False
+            if hasattr(self, 'btn_refresh_magasin'):
+                self.btn_refresh_magasin.disabled = False
+                self.btn_refresh_magasin.theme_text_color = 'Custom'
+            if hasattr(self, 'force_unlock_event') and self.force_unlock_event:
+                self.force_unlock_event.cancel()
+
+    def _fast_ping_thread(self, index, srv):
+        import requests
+        import re
+        from kivy.clock import Clock
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        local_ip = str(srv.get('local_ip', '')).strip()
+        ext_ip = str(srv.get('ext_ip', '')).strip()
+        urls_to_test = []
+        if ext_ip:
+            clean_ext = ext_ip.rstrip('/').replace('https://', '').replace('http://', '')
+            if re.search('[a-zA-Z]', clean_ext):
+                urls_to_test.extend([f'https://{clean_ext}/api/ping', f'http://{clean_ext}/api/ping'])
+            else:
+                urls_to_test.extend([f'http://{clean_ext}:{DEFAULT_PORT}/api/ping', f'http://{clean_ext}/api/ping'])
+        if local_ip:
+            clean_loc = local_ip.rstrip('/').replace('http://', '')
+            urls_to_test.extend([f'http://{clean_loc}:{DEFAULT_PORT}/api/ping', f'http://{clean_loc}/api/ping'])
+        headers = {'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36', 'Connection': 'close'}
+        is_online = False
+        for url in urls_to_test:
+            try:
+                res = requests.get(url, headers=headers, timeout=1.5, verify=False)
+                if res.status_code in [200, 401, 403, 405]:
                     is_online = True
                     break
             except:
                 continue
-        return (index, is_online)
-
-    def _check_stores_connection_bg(self, servers):
-        import concurrent.futures
-        from kivy.clock import Clock
-        indexed_servers = list(enumerate(servers))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            futures = {executor.submit(self._ping_store_worker, item): item for item in indexed_servers}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    index, is_online = future.result()
-                    Clock.schedule_once(lambda dt, idx=index, online=is_online: self._update_store_status_ui(idx, online), 0)
-                except Exception as e:
-                    pass
+        Clock.schedule_once(lambda dt: self._handle_ping_result(index, is_online), 0)
 
     @mainthread
     def _update_store_status_ui(self, index, is_online):
