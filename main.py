@@ -880,7 +880,7 @@ class StockApp(MDApp):
             report_data = {}
             for i in selected_indexes:
                 srv = self.sync_servers_list[i]
-                report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'added': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
+                report_data[i] = {'name': srv.get('name', f'Magasin {i + 1}'), 'initial_count': 0, 'added': 0, 'updated': 0, 'total': 0, 'status': 'Échoué (Erreur)'}
             self._update_sync_ui_progress(10, 'Étape 1/3 : Génération Serveur', 'Demande aux serveurs de générer les codes manquants...')
 
             def request_server_generation(idx):
@@ -918,9 +918,12 @@ class StockApp(MDApp):
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
                 results = executor.map(fetch_catalog, selected_indexes)
             self._update_sync_ui_progress(50, 'Étape 2/3 : Unification des catalogues', 'Analyse et fusion des produits...')
-            master_catalog_by_name = {}
+            master_catalog_by_barcode = {}
             existing_barcodes = set()
-            for idx, prods_data in results:
+            results_list = list(results)
+            active_idx = self.store.get('servers_config').get('active_index', 0)
+            results_list.sort(key=lambda x: 0 if x[0] == active_idx else 1)
+            for idx, prods_data in results_list:
                 if prods_data:
                     prods_list = []
                     if isinstance(prods_data, dict):
@@ -934,30 +937,23 @@ class StockApp(MDApp):
                         prods_list = prods_data
                     store_catalogs_raw[idx] = prods_list
                     report_data[idx]['status'] = 'Connecté'
-                    report_data[idx]['total'] = len(prods_list)
+                    report_data[idx]['initial_count'] = len(prods_list)
                     for p in prods_list:
                         name = str(p.get('name', '')).strip()
-                        if not name:
+                        if not name or name.lower() in ['منتج افتراضي', 'default product', 'autre article', 'none', '']:
                             continue
-                        name_key = name.lower()
                         bc = str(p.get('barcode', '')).strip()
-                        if bc:
-                            existing_barcodes.add(bc)
-                        if name_key not in master_catalog_by_name:
-                            master_catalog_by_name[name_key] = p
-                        else:
-                            current_bc = str(master_catalog_by_name[name_key].get('barcode', '')).strip()
-                            if bc and (not current_bc):
-                                master_catalog_by_name[name_key] = p
+                        if not bc:
+                            bc = self.generate_unique_ean13(existing_barcodes)
+                            p['barcode'] = bc
+                        existing_barcodes.add(bc)
+                        if bc not in master_catalog_by_barcode:
+                            master_catalog_by_barcode[bc] = p
                 else:
                     store_catalogs_raw[idx] = []
                     report_data[idx]['status'] = 'Hors ligne'
-            for name_key, p in master_catalog_by_name.items():
-                bc = str(p.get('barcode', '')).strip()
-                if not bc:
-                    new_bc = self.generate_unique_ean13(existing_barcodes)
-                    p['barcode'] = new_bc
-            self._update_sync_ui_progress(70, 'Étape 3/3 : Synchronisation des magasins', 'Envoi des données unifiées...')
+            self._update_sync_ui_progress(70, 'Étape 3/3 : Synchronisation des magasins', 'Mise à jour (Création & Modification)...')
+            master_total_count = len(master_catalog_by_barcode)
 
             def push_batch(idx):
                 if idx not in store_catalogs_raw:
@@ -966,46 +962,38 @@ class StockApp(MDApp):
                 url = srv.get('_working_url')
                 if not url:
                     return (idx, 0)
-                local_prods = store_catalogs_raw[idx]
-                local_names = {str(p.get('name', '')).strip().lower() for p in local_prods}
-                local_barcodes = {str(p.get('barcode', '')).strip() for p in local_prods if str(p.get('barcode', '')).strip()}
-                items_to_add = []
-                for p_master in master_catalog_by_name.values():
-                    m_name = str(p_master.get('name', '')).strip()
-                    m_bc = str(p_master.get('barcode', '')).strip()
-                    if m_name.lower() not in local_names and m_bc not in local_barcodes:
-                        items_to_add.append({'name': m_name, 'barcode': m_bc, 'description': str(p_master.get('description', '')), 'product_ref': str(p_master.get('product_ref') or p_master.get('ref') or ''), 'category': str(p_master.get('category', '')), 'cost': float(p_master.get('purchase_price', p_master.get('cost', 0)) or 0), 'price': float(p_master.get('price', 0) or 0), 'price_semi': float(p_master.get('price_semi', 0) or 0), 'price_wholesale': float(p_master.get('price_wholesale', 0) or 0), 'image_path': '', 'unit': str(p_master.get('unit', '')), 'tva': float(p_master.get('tva', 0) or 0)})
-                added_count = 0
-                if items_to_add:
+                items_to_sync = []
+                for p_master in master_catalog_by_barcode.values():
+                    items_to_sync.append({'name': str(p_master.get('name', '')).strip(), 'barcode': str(p_master.get('barcode', '')).strip(), 'description': str(p_master.get('description', '')), 'product_ref': str(p_master.get('product_ref') or p_master.get('ref') or ''), 'category': str(p_master.get('category', '')), 'cost': float(p_master.get('purchase_price', p_master.get('cost', 0)) or 0), 'price': float(p_master.get('price', 0) or 0), 'price_semi': float(p_master.get('price_semi', 0) or 0), 'price_wholesale': float(p_master.get('price_wholesale', 0) or 0), 'image_path': str(p_master.get('image_path', '')), 'unit': str(p_master.get('unit', '')), 'tva': float(p_master.get('tva', 0) or 0)})
+                processed_count = 0
+                if items_to_sync:
                     headers = {}
                     if srv.get('pin'):
                         headers['X-Server-PIN'] = str(srv.get('pin'))
-                    chunk_size = 300
-                    for i in range(0, len(items_to_add), chunk_size):
-                        chunk = items_to_add[i:i + chunk_size]
+                    chunk_size = 200
+                    for i in range(0, len(items_to_sync), chunk_size):
+                        chunk = items_to_sync[i:i + chunk_size]
                         try:
-                            post_res = session.post(f'{url}/api/add_products_batch', json={'products': chunk}, headers=headers, timeout=60, verify=False)
+                            post_res = session.post(f'{url}/api/sync_products_batch', json={'products': chunk}, headers=headers, timeout=60, verify=False)
                             if post_res.status_code == 200:
                                 try:
                                     resp_data = post_res.json()
-                                    if 'added' in resp_data:
-                                        added_count += int(resp_data['added'])
-                                    elif 'count' in resp_data:
-                                        added_count += int(resp_data['count'])
-                                    else:
-                                        added_count += len(chunk)
+                                    processed_count += int(resp_data.get('processed', len(chunk)))
                                 except:
-                                    added_count += len(chunk)
-                        except:
-                            pass
-                return (idx, added_count)
+                                    processed_count += len(chunk)
+                        except Exception as e:
+                            print(f'Sync push error: {e}')
+                return (idx, processed_count)
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
                 push_results = executor.map(push_batch, selected_indexes)
-            for idx, added in push_results:
-                safe_added = int(added)
-                report_data[idx]['added'] = safe_added
-                report_data[idx]['total'] += safe_added
-            self._update_sync_ui_progress(100, 'Opération terminée !', 'Toutes les bases sont unifiées.')
+            for idx, processed in push_results:
+                initial = report_data[idx]['initial_count']
+                added_calc = master_total_count - initial if master_total_count > initial else 0
+                updated_calc = initial if processed > 0 else 0
+                report_data[idx]['added'] = added_calc
+                report_data[idx]['updated'] = updated_calc
+                report_data[idx]['total'] = master_total_count
+            self._update_sync_ui_progress(100, 'Opération terminée !', 'Tous les produits sont mis à jour.')
             time.sleep(0.5)
             Clock.schedule_once(lambda dt: self.show_sync_report(report_data), 0)
         except Exception as global_e:
@@ -1037,18 +1025,22 @@ class StockApp(MDApp):
                 self.sync_report_dialog = None
             except:
                 pass
-        dialog_height = min(Window.height * 0.8, dp(650))
+        dialog_height = min(Window.height * 0.85, dp(680))
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dialog_height, spacing=dp(15), padding=[dp(5), dp(10), dp(5), dp(5)])
-        total_added_global = sum([int(v.get('added', 0)) for k, v in report_data.items() if report_data])
-        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(100), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if total_added_global > 0 else (0.95, 0.95, 0.95, 1))
-        icon_color = (0, 0.5, 0.9, 1) if total_added_global > 0 else (0.4, 0.4, 0.4, 1)
-        header_card.add_widget(MDIcon(icon='cloud-check' if total_added_global > 0 else 'cloud-sync', theme_text_color='Custom', text_color=icon_color, font_size='45sp', pos_hint={'center_y': 0.5}))
+        master_total = 0
+        for k, v in report_data.items():
+            if int(v.get('total', 0)) > 0:
+                master_total = int(v.get('total', 0))
+                break
+        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(100), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if master_total > 0 else (0.95, 0.95, 0.95, 1))
+        icon_color = (0, 0.5, 0.9, 1) if master_total > 0 else (0.4, 0.4, 0.4, 1)
+        header_card.add_widget(MDIcon(icon='cloud-check' if master_total > 0 else 'cloud-sync', theme_text_color='Custom', text_color=icon_color, font_size='45sp', pos_hint={'center_y': 0.5}))
         header_text = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
         header_text.add_widget(MDLabel(text='Mise à jour terminée', font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=(0.1, 0.1, 0.1, 1)))
-        header_text.add_widget(MDLabel(text=f'Total global ajouté : +{total_added_global}', font_style='H6', bold=True, theme_text_color='Custom', text_color=icon_color))
+        header_text.add_widget(MDLabel(text=f'Total Catalogue Unifié : {master_total}', font_style='H6', bold=True, theme_text_color='Custom', text_color=icon_color))
         header_card.add_widget(header_text)
         content.add_widget(header_card)
-        content.add_widget(MDLabel(text='Détails par magasin :', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20)))
+        content.add_widget(MDLabel(text='Détails des opérations par magasin :', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20)))
         scroll = MDScrollView()
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[0, dp(5), 0, dp(15)])
         if not report_data:
@@ -1057,24 +1049,35 @@ class StockApp(MDApp):
         for i, r_data in sorted_report:
             s_name = self.fix_text(str(r_data.get('name', 'Magasin')))
             s_added = int(r_data.get('added', 0))
+            s_updated = int(r_data.get('updated', 0))
             s_total = int(r_data.get('total', 0))
             s_status = str(r_data.get('status', 'Erreur'))
             is_offline = 'Hors ligne' in s_status or 'Erreur' in s_status
-            store_card = MDCard(orientation='horizontal', padding=[dp(15), dp(10)], spacing=dp(10), size_hint_y=None, height=dp(75), radius=[12], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
-            store_card.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='30sp', pos_hint={'center_y': 0.5}))
-            info_box = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(0))
-            info_box.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle2', theme_text_color='Primary'))
-            if is_offline:
-                info_box.add_widget(MDLabel(text=s_status, font_style='Caption', theme_text_color='Error'))
-            else:
-                info_box.add_widget(MDLabel(text=f'Total en base: {s_total}', font_style='Caption', theme_text_color='Secondary'))
-            store_card.add_widget(info_box)
+            store_card = MDCard(orientation='vertical', padding=[dp(15), dp(15)], spacing=dp(10), size_hint_y=None, height=dp(110), radius=[12], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
+            top_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(30))
+            top_row.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='24sp', size_hint_x=None, width=dp(30)))
+            top_row.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle1', theme_text_color='Primary'))
             if not is_offline:
-                badge_color = (0, 0.7, 0.2, 1) if s_added > 0 else (0.6, 0.6, 0.6, 1)
-                badge_bg = (0.9, 1, 0.9, 1) if s_added > 0 else (0.95, 0.95, 0.95, 1)
-                badge = MDCard(size_hint=(None, None), size=(dp(65), dp(35)), radius=[15], md_bg_color=badge_bg, elevation=0, pos_hint={'center_y': 0.5})
-                badge.add_widget(MDLabel(text=f'+{s_added}', halign='center', bold=True, theme_text_color='Custom', text_color=badge_color, font_size='15sp'))
-                store_card.add_widget(badge)
+                top_row.add_widget(MDLabel(text=f'Total: {s_total}', halign='right', font_style='Caption', bold=True, theme_text_color='Secondary'))
+            store_card.add_widget(top_row)
+            store_card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(1), md_bg_color=(0.95, 0.95, 0.95, 1)))
+            stats_row = MDBoxLayout(orientation='horizontal', spacing=dp(10))
+            if is_offline:
+                stats_row.add_widget(MDLabel(text=s_status, font_style='Subtitle2', theme_text_color='Error', halign='center'))
+            else:
+                badge_add = MDCard(radius=[8], md_bg_color=(0.9, 1, 0.9, 1) if s_added > 0 else (0.95, 0.95, 0.95, 1), elevation=0, padding=[dp(5), 0])
+                box_add = MDBoxLayout(orientation='horizontal', spacing=dp(5), pos_hint={'center_y': 0.5})
+                box_add.add_widget(MDIcon(icon='plus-circle', theme_text_color='Custom', text_color=(0, 0.6, 0, 1) if s_added > 0 else (0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(20)))
+                box_add.add_widget(MDLabel(text=f'+{s_added} Nouveaux', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0, 0.5, 0, 1) if s_added > 0 else (0.4, 0.4, 0.4, 1), pos_hint={'center_y': 0.5}))
+                badge_add.add_widget(box_add)
+                badge_upd = MDCard(radius=[8], md_bg_color=(0.9, 0.95, 1, 1) if s_updated > 0 else (0.95, 0.95, 0.95, 1), elevation=0, padding=[dp(5), 0])
+                box_upd = MDBoxLayout(orientation='horizontal', spacing=dp(5), pos_hint={'center_y': 0.5})
+                box_upd.add_widget(MDIcon(icon='update', theme_text_color='Custom', text_color=(0, 0.4, 0.8, 1) if s_updated > 0 else (0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(20)))
+                box_upd.add_widget(MDLabel(text=f'{s_updated} Mis à jour', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0, 0.3, 0.7, 1) if s_updated > 0 else (0.4, 0.4, 0.4, 1), pos_hint={'center_y': 0.5}))
+                badge_upd.add_widget(box_upd)
+                stats_row.add_widget(badge_add)
+                stats_row.add_widget(badge_upd)
+            store_card.add_widget(stats_row)
             list_layout.add_widget(store_card)
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
@@ -1207,6 +1210,18 @@ class StockApp(MDApp):
                 if i_in_l:
                     local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', i_in_l, target_name, self.selected_location, True))
                     remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', i_in_r, local_name, 'store', True))
+        elif self.current_mode == 'remote_return_client':
+            i_local = build_items_payload(self.cart, False)
+            i_remote = build_items_payload(self.cart, True)
+            if not validation_error:
+                local_payloads.append(build_payload('RC', f'Retour Client de: {target_name}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('RF', f'Retour Fourn. auto vers: {local_name}', i_remote, local_name, 'store'))
+        elif self.current_mode == 'remote_return_supplier':
+            i_local = build_items_payload(self.cart, False)
+            i_remote = build_items_payload(self.cart, True)
+            if not validation_error:
+                local_payloads.append(build_payload('RF', f'Retour Fournisseur vers: {target_name}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('RC', f'Retour Client auto depuis: {local_name}', i_remote, local_name, 'store'))
         if validation_error:
             self.is_transaction_in_progress = False
             from kivymd.uix.dialog import MDDialog
@@ -1672,10 +1687,18 @@ class StockApp(MDApp):
             dialog_title = 'Recevoir de (Source)'
             theme_color = (0.1, 0.6, 0.2, 1)
             bg_color = (0.9, 1, 0.92, 1)
-        else:
+        elif mode_transfert == 'remote_exchange':
             dialog_title = 'Échanger avec (Magasin)'
             theme_color = (0.9, 0.5, 0, 1)
             bg_color = (1, 0.95, 0.85, 1)
+        elif mode_transfert == 'remote_return_client':
+            dialog_title = 'Retour Client (Depuis Magasin)'
+            theme_color = (0.9, 0.0, 0.0, 1)
+            bg_color = (1, 0.85, 0.85, 1)
+        elif mode_transfert == 'remote_return_supplier':
+            dialog_title = 'Retour Fournisseur (Vers Magasin)'
+            theme_color = (0.8, 0.1, 0.5, 1)
+            bg_color = (1, 0.88, 0.95, 1)
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.card import MDCard
         from kivymd.uix.label import MDIcon, MDLabel
@@ -1864,7 +1887,7 @@ class StockApp(MDApp):
         self.cart = []
         self.selected_entity = {'id': None, 'name': target_server.get('name', 'Magasin Distant')}
         self.is_remote_live_data = False
-        title_map = {'remote_transfer_out': f"Envoi vers: {target_server.get('name')}", 'remote_transfer_in': f"Réception de: {target_server.get('name')}", 'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}"}
+        title_map = {'remote_transfer_out': f"Envoi vers: {target_server.get('name')}", 'remote_transfer_in': f"Réception de: {target_server.get('name')}", 'remote_exchange': f"Étape 1: Envoi vers {target_server.get('name')}", 'remote_return_client': f"Retour Client: {target_server.get('name')}", 'remote_return_supplier': f"Retour Fourn: {target_server.get('name')}"}
         self.prod_toolbar.title = self.fix_text(title_map.get(mode_transfert, 'Opération'))
         self.theme_cls.primary_palette = 'DeepPurple'
         self.prod_toolbar.right_action_items = []
@@ -1935,7 +1958,7 @@ class StockApp(MDApp):
                         filtered_local_products_in.append(mapped_in)
                 self.remote_filtered_products_out = filtered_local_products_out
                 self.remote_filtered_products_in = filtered_local_products_in
-                if mode_transfert == 'remote_transfer_in':
+                if mode_transfert in ['remote_transfer_in', 'remote_return_client']:
                     final_list = self.remote_filtered_products_in
                 else:
                     final_list = self.remote_filtered_products_out
@@ -3571,6 +3594,11 @@ class StockApp(MDApp):
     def update_dashboard_layout(self):
         if not self.buttons_container or not self.stats_card_container:
             return
+        from kivy.metrics import dp
+        from kivymd.uix.gridlayout import MDGridLayout
+        from kivymd.uix.card import MDCard, MDSeparator
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.label import MDIcon, MDLabel
         self.buttons_container.clear_widgets()
         c_bv = ((0.88, 0.97, 0.9, 1), (0.1, 0.6, 0.2, 1))
         c_ba = ((1.0, 0.94, 0.84, 1), (0.9, 0.4, 0.0, 1))
@@ -3626,33 +3654,39 @@ class StockApp(MDApp):
             self.buttons_container.add_widget(grid_expenses)
             self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', c_ca[0], c_ca[1], self.open_catalogue_browser))
         if has_multiple_stores:
-            multi_store_container = MDCard(orientation='vertical', padding=dp(12), spacing=dp(10), radius=[15], md_bg_color=(0.1, 0.15, 0.25, 1), elevation=2, size_hint_y=None, adaptive_height=True)
-            header_multi = MDBoxLayout(orientation='horizontal', adaptive_size=True, spacing=dp(12), pos_hint={'center_x': 0.5})
-            icon_widget = MDIcon(icon='monitor-dashboard', theme_text_color='Custom', text_color=(0.8, 0.85, 0.9, 1), font_size='22sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(28))
-            lbl_widget = MDLabel(text='PANNEAU MULTI-MAGASINS', font_style='Subtitle2', bold=True, theme_text_color='Custom', text_color=(0.8, 0.85, 0.9, 1), adaptive_size=True, pos_hint={'center_y': 0.5})
+            multi_store_container = MDCard(orientation='vertical', padding=[dp(15), dp(15), dp(15), dp(20)], spacing=dp(15), radius=[15], md_bg_color=(1, 1, 1, 1), elevation=2, line_color=(0.9, 0.9, 0.9, 1), line_width=1, size_hint_y=None, adaptive_height=True)
+            header_multi = MDBoxLayout(orientation='horizontal', adaptive_size=True, spacing=dp(10), pos_hint={'center_x': 0.5})
+            icon_widget = MDIcon(icon='server-network', theme_text_color='Custom', text_color=(0.1, 0.5, 0.8, 1), font_size='24sp', pos_hint={'center_y': 0.5})
+            lbl_widget = MDLabel(text='PANNEAU MULTI-MAGASINS', font_style='Subtitle2', bold=True, theme_text_color='Primary', adaptive_size=True, pos_hint={'center_y': 0.5})
             header_multi.add_widget(icon_widget)
             header_multi.add_widget(lbl_widget)
             multi_store_container.add_widget(header_multi)
+            multi_store_container.add_widget(MDSeparator(height=dp(1), color=(0.93, 0.93, 0.93, 1)))
 
-            def create_centered_btn(icon, text, bg_color, icon_color, action):
-                card = MDCard(orientation='vertical', padding=dp(8), radius=[12], ripple_behavior=True, on_release=action, md_bg_color=bg_color, elevation=2, size_hint_y=None, height=dp(100))
+            def create_modern_btn(icon, text, icon_color, action):
+                card = MDCard(orientation='vertical', padding=[dp(5), dp(12), dp(5), dp(10)], radius=[10], ripple_behavior=True, on_release=action, md_bg_color=(0.96, 0.97, 0.98, 1), elevation=0, size_hint_y=None, height=dp(85))
+                card.add_widget(MDIcon(icon=icon, font_size='32sp', pos_hint={'center_x': 0.5}, theme_text_color='Custom', text_color=icon_color))
                 card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
-                card.add_widget(MDIcon(icon=icon, font_size='34sp', pos_hint={'center_x': 0.5}, theme_text_color='Custom', text_color=icon_color))
-                lbl = MDLabel(text=text, halign='center', valign='center', bold=True, font_style='Caption', theme_text_color='Primary')
+                lbl = MDLabel(text=text, halign='center', valign='center', bold=True, font_style='Caption', theme_text_color='Custom', text_color=(0.2, 0.2, 0.2, 1))
                 lbl.bind(size=lbl.setter('text_size'))
                 card.add_widget(lbl)
                 return card
-            trans_grid = MDGridLayout(cols=3, spacing=dp(8), adaptive_height=True)
-            btn_env = create_centered_btn('package-up', 'ENVOYER', (1, 0.85, 0.85, 1), (0.8, 0.1, 0.1, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_out'))
-            btn_rec = create_centered_btn('package-down', 'RECEVOIR', (0.9, 1, 0.92, 1), (0.1, 0.6, 0.2, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_in'))
-            btn_ech = create_centered_btn('sync-circle', 'ÉCHANGE', (1, 0.95, 0.85, 1), (0.9, 0.5, 0, 1), lambda x: self.open_remote_transfer_selector('remote_exchange'))
-            trans_grid.add_widget(btn_env)
-            trans_grid.add_widget(btn_rec)
-            trans_grid.add_widget(btn_ech)
-            multi_store_container.add_widget(trans_grid)
-            multi_store_container.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
+            row_transferts = MDBoxLayout(orientation='horizontal', spacing=dp(10), adaptive_height=True)
+            btn_env = create_modern_btn('package-up', 'ENVOYER', (0.1, 0.5, 0.8, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_out'))
+            btn_rec = create_modern_btn('package-down', 'RECEVOIR', (0.0, 0.6, 0.3, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_in'))
+            btn_ech = create_modern_btn('sync-circle', 'ÉCHANGE', (0.9, 0.5, 0.0, 1), lambda x: self.open_remote_transfer_selector('remote_exchange'))
+            row_transferts.add_widget(btn_env)
+            row_transferts.add_widget(btn_rec)
+            row_transferts.add_widget(btn_ech)
+            multi_store_container.add_widget(row_transferts)
+            row_retours = MDBoxLayout(orientation='horizontal', spacing=dp(10), adaptive_height=True)
+            btn_ret_cl = create_modern_btn('keyboard-return', 'RETOUR CL.', (0.8, 0.1, 0.1, 1), lambda x: self.open_remote_transfer_selector('remote_return_client'))
+            btn_ret_fr = create_modern_btn('undo', 'RETOUR FR.', (0.5, 0.1, 0.6, 1), lambda x: self.open_remote_transfer_selector('remote_return_supplier'))
+            row_retours.add_widget(btn_ret_cl)
+            row_retours.add_widget(btn_ret_fr)
+            multi_store_container.add_widget(row_retours)
             from kivymd.uix.button import MDFillRoundFlatIconButton
-            btn_sync_articles = MDFillRoundFlatIconButton(text='SYNCHRONISATION ARTICLES', icon='sync', md_bg_color=(0.1, 0.5, 0.8, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), font_size='16sp', size_hint_x=0.9, pos_hint={'center_x': 0.5}, size_hint_y=None, height=dp(50), on_release=self.open_sync_articles_dialog)
+            btn_sync_articles = MDFillRoundFlatIconButton(text='SYNCHRONISER LES ARTICLES', icon='cloud-sync', md_bg_color=(0.15, 0.18, 0.22, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), font_size='15sp', size_hint_x=0.85, pos_hint={'center_x': 0.5}, size_hint_y=None, height=dp(48), on_release=self.open_sync_articles_dialog)
             multi_store_container.add_widget(btn_sync_articles)
             self.buttons_container.add_widget(multi_store_container)
         self.stats_card_container.clear_widgets()
@@ -3665,6 +3699,7 @@ class StockApp(MDApp):
         title_label = MDLabel(text='Tableau de Bord', font_style='H6', bold=True, theme_text_color='Primary', size_hint_y=None, height=dp(30))
         header_box.add_widget(title_label)
         if not self.is_seller_mode:
+            from kivymd.uix.button import MDRaisedButton
             tabs_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40), spacing=dp(5))
             self.btn_stat_today = MDRaisedButton(text='AUJ.', size_hint_x=0.33, elevation=0, on_release=lambda x: self.filter_admin_stats(day_offset=0))
             self.btn_stat_yesterday = MDRaisedButton(text='HIER', size_hint_x=0.33, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_admin_stats(day_offset=1))
@@ -3702,7 +3737,7 @@ class StockApp(MDApp):
 
     def open_add_expense_dialog(self, edit_data=None):
         from kivymd.uix.dialog import MDDialog
-        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton, MDFillRoundFlatIconButton
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.textfield import MDTextField
         from kivymd.uix.menu import MDDropdownMenu
@@ -3738,7 +3773,7 @@ class StockApp(MDApp):
         content.add_widget(self.expense_cat_field)
         content.add_widget(self.expense_desc_field)
         if not edit_data:
-            btn_history = MDFlatButton(text="VOIR L'HISTORIQUE 📜", theme_text_color='Custom', text_color=self.theme_cls.primary_color, pos_hint={'center_x': 0.5}, on_release=self.open_expense_history_dialog)
+            btn_history = MDFillRoundFlatIconButton(text="VOIR L'HISTORIQUE", icon='history', md_bg_color=(0, 0, 0, 0), theme_text_color='Custom', text_color=self.theme_cls.primary_color, icon_color=self.theme_cls.primary_color, pos_hint={'center_x': 0.5}, on_release=self.open_expense_history_dialog)
             content.add_widget(btn_history)
         self.btn_submit_exp = MDRaisedButton(text=btn_action_text, md_bg_color=btn_action_color, on_release=self.submit_expense)
         buttons = [MDFlatButton(text='ANNULER', theme_text_color='Error', on_release=lambda x: self.expense_dialog.dismiss()), self.btn_submit_exp]
@@ -5441,7 +5476,7 @@ class StockApp(MDApp):
                 self.lbl_total_title.text = 'TOTAL:'
         self.update_location_display()
         if hasattr(self, 'btn_loc_screen'):
-            if self.current_mode in ['stock_in', 'stock_out', 'order_purchase', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+            if self.current_mode in ['stock_in', 'stock_out', 'order_purchase', 'remote_transfer_out', 'remote_transfer_in', 'remote_exchange', 'remote_return_client', 'remote_return_supplier']:
                 self.btn_loc_screen.disabled = True
                 self.btn_loc_screen.opacity = 0
             else:
@@ -5467,7 +5502,7 @@ class StockApp(MDApp):
             if hasattr(self, 'btn_validate_cart'):
                 self.btn_validate_cart.text = 'ENVOYER LA DEMANDE'
                 self.btn_validate_cart.md_bg_color = (0.2, 0.6, 0.8, 1)
-        elif self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+        elif self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange', 'remote_return_client', 'remote_return_supplier']:
             if hasattr(self, 'btn_ent_screen'):
                 self.btn_ent_screen.opacity = 1
                 self.btn_ent_screen.disabled = True
@@ -5475,6 +5510,10 @@ class StockApp(MDApp):
                     txt = f"Envoi vers: {self.target_remote_server.get('name', '')}"
                 elif self.current_mode == 'remote_transfer_in':
                     txt = f"Réception de: {self.target_remote_server.get('name', '')}"
+                elif self.current_mode == 'remote_return_client':
+                    txt = f"Retour (RC) de: {self.target_remote_server.get('name', '')}"
+                elif self.current_mode == 'remote_return_supplier':
+                    txt = f"Retour (RF) vers: {self.target_remote_server.get('name', '')}"
                 elif getattr(self, 'exchange_step', 1) == 1:
                     txt = f"Échange (1/2) - Envoi vers: {self.target_remote_server.get('name', '')}"
                 else:
@@ -5486,6 +5525,10 @@ class StockApp(MDApp):
                     self.btn_validate_cart.text = "VALIDER L'ENVOI"
                 elif self.current_mode == 'remote_transfer_in':
                     self.btn_validate_cart.text = 'VALIDER LA RÉCEPTION'
+                elif self.current_mode == 'remote_return_client':
+                    self.btn_validate_cart.text = 'VALIDER RETOUR CL.'
+                elif self.current_mode == 'remote_return_supplier':
+                    self.btn_validate_cart.text = 'VALIDER RETOUR FR.'
                 elif getattr(self, 'exchange_step', 1) == 1:
                     self.btn_validate_cart.text = 'SUIVANT (ÉTAPE 2)'
                 else:
@@ -7169,7 +7212,7 @@ class StockApp(MDApp):
         self.temp_total_ht = total_ht
         self.temp_total_tva = total_tva
         base_ttc = self._round_num(total_ht + total_tva)
-        if self.current_mode in ['return_sale', 'return_purchase']:
+        if self.current_mode in ['return_sale', 'return_purchase', 'remote_return_client', 'remote_return_supplier']:
             self.process_transaction(paid_amount=0.0, total_amount=base_ttc, method='')
             return
         is_zero_pay_mode = self.current_mode in ['transfer', 'proforma', 'order_purchase', 'stock_in', 'stock_out']
@@ -7470,7 +7513,7 @@ class StockApp(MDApp):
         self.debt_dialog.open()
 
     def process_transaction(self, paid_amount, total_amount, method=None):
-        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange']:
+        if self.current_mode in ['remote_transfer_out', 'remote_transfer_in', 'remote_exchange', 'remote_return_client', 'remote_return_supplier']:
             self.submit_remote_transfer(paid_amount, method if method else '')
             return
         if getattr(self, 'is_transaction_in_progress', False):
@@ -7502,8 +7545,10 @@ class StockApp(MDApp):
                             error_msgs.append(f'- {clean_name}: Disp: {int(stock_val)} | Req: {int(qty_needed)}')
             if error_msgs:
                 self.notify('Stock Insuffisant pour le transfert', 'error')
-                if not self.dialog:
+                if not getattr(self, 'dialog', None):
                     txt = "Impossible d'effectuer le transfert.\nStock insuffisant dans la source (" + ('Magasin' if source_loc == 'store' else 'Dépôt') + ') :\n\n' + '\n'.join(error_msgs)
+                    from kivymd.uix.dialog import MDDialog
+                    from kivymd.uix.button import MDFlatButton
                     self.dialog = MDDialog(title='Erreur de Stock', text=txt, buttons=[MDFlatButton(text='OK', on_release=lambda x: self.dialog.dismiss())])
                     self.dialog.open()
                 return
@@ -7555,7 +7600,7 @@ class StockApp(MDApp):
                     custom_label = 'Versement'
                 excess_data = {'entity_id': ent_id, 'amount': excess_amount, 'type': p_type, 'custom_label': custom_label, 'user_name': self.current_user_name, 'note': custom_label, 'is_simple_payment': True, 'timestamp': str(datetime.now())}
             server_id_to_update = None
-            if self.editing_transaction_key:
+            if getattr(self, 'editing_transaction_key', None):
                 if self.editing_transaction_key == 'SERVER_EDIT_MODE':
                     server_id_to_update = self.current_editing_server_id
                 elif self.offline_store.exists(self.editing_transaction_key):
@@ -7585,6 +7630,7 @@ class StockApp(MDApp):
                         if self.store.exists('printer_config'):
                             conf = self.store.get('printer_config')
                             if conf.get('auto', False) and conf.get('mac', ''):
+                                import threading
                                 threading.Thread(target=self.print_ticket_bluetooth, args=(data,), daemon=True).start()
                 except Exception as e:
                     print(f'Auto print error: {e}')
@@ -7611,7 +7657,7 @@ class StockApp(MDApp):
                     if res.get('status') == 'error':
                         self.is_transaction_in_progress = False
                         self.notify(f"Erreur Serveur: {res.get('message', '')}", 'error')
-                        if self.dialog:
+                        if getattr(self, 'dialog', None):
                             self.dialog.dismiss()
                         from kivymd.uix.dialog import MDDialog
                         from kivymd.uix.button import MDFlatButton
