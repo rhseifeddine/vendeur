@@ -957,14 +957,16 @@ class StockApp(MDApp):
 
             def push_batch(idx):
                 if idx not in store_catalogs_raw:
-                    return (idx, 0)
+                    return {'idx': idx, 'added': 0, 'updated': 0, 'processed': 0}
                 srv = self.sync_servers_list[idx]
                 url = srv.get('_working_url')
                 if not url:
-                    return (idx, 0)
+                    return {'idx': idx, 'added': 0, 'updated': 0, 'processed': 0}
                 items_to_sync = []
                 for p_master in master_catalog_by_barcode.values():
                     items_to_sync.append({'name': str(p_master.get('name', '')).strip(), 'barcode': str(p_master.get('barcode', '')).strip(), 'description': str(p_master.get('description', '')), 'product_ref': str(p_master.get('product_ref') or p_master.get('ref') or ''), 'category': str(p_master.get('category', '')), 'cost': float(p_master.get('purchase_price', p_master.get('cost', 0)) or 0), 'price': float(p_master.get('price', 0) or 0), 'price_semi': float(p_master.get('price_semi', 0) or 0), 'price_wholesale': float(p_master.get('price_wholesale', 0) or 0), 'image_path': str(p_master.get('image_path', '')), 'unit': str(p_master.get('unit', '')), 'tva': float(p_master.get('tva', 0) or 0)})
+                added_count = 0
+                updated_count = 0
                 processed_count = 0
                 if items_to_sync:
                     headers = {}
@@ -978,20 +980,20 @@ class StockApp(MDApp):
                             if post_res.status_code == 200:
                                 try:
                                     resp_data = post_res.json()
+                                    added_count += int(resp_data.get('added', 0))
+                                    updated_count += int(resp_data.get('updated', 0))
                                     processed_count += int(resp_data.get('processed', len(chunk)))
                                 except:
-                                    processed_count += len(chunk)
+                                    pass
                         except Exception as e:
                             print(f'Sync push error: {e}')
-                return (idx, processed_count)
+                return {'idx': idx, 'added': added_count, 'updated': updated_count, 'processed': processed_count}
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(total_stores, 3)) as executor:
-                push_results = executor.map(push_batch, selected_indexes)
-            for idx, processed in push_results:
-                initial = report_data[idx]['initial_count']
-                added_calc = master_total_count - initial if master_total_count > initial else 0
-                updated_calc = initial if processed > 0 else 0
-                report_data[idx]['added'] = added_calc
-                report_data[idx]['updated'] = updated_calc
+                push_results = list(executor.map(push_batch, selected_indexes))
+            for res_dict in push_results:
+                idx = res_dict['idx']
+                report_data[idx]['added'] = res_dict['added']
+                report_data[idx]['updated'] = res_dict['updated']
                 report_data[idx]['total'] = master_total_count
             self._update_sync_ui_progress(100, 'Opération terminée !', 'Tous les produits sont mis à jour.')
             time.sleep(0.5)
@@ -1012,56 +1014,72 @@ class StockApp(MDApp):
         from kivymd.uix.dialog import MDDialog
         from kivy.metrics import dp
         from kivy.core.window import Window
+
         self.is_syncing_articles = False
+
         if hasattr(self, 'loading_sync_dialog') and self.loading_sync_dialog:
             try:
                 self.loading_sync_dialog.dismiss()
                 self.loading_sync_dialog = None
             except:
                 pass
+
         if hasattr(self, 'sync_report_dialog') and self.sync_report_dialog:
             try:
                 self.sync_report_dialog.dismiss()
                 self.sync_report_dialog = None
             except:
                 pass
+
         dialog_height = min(Window.height * 0.85, dp(680))
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dialog_height, spacing=dp(15), padding=[dp(5), dp(10), dp(5), dp(5)])
+
         master_total = 0
         for k, v in report_data.items():
             if int(v.get('total', 0)) > 0:
                 master_total = int(v.get('total', 0))
                 break
-        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(100), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if master_total > 0 else (0.95, 0.95, 0.95, 1))
+
+        header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(70), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if master_total > 0 else (0.95, 0.95, 0.95, 1))
         icon_color = (0, 0.5, 0.9, 1) if master_total > 0 else (0.4, 0.4, 0.4, 1)
+
         header_card.add_widget(MDIcon(icon='cloud-check' if master_total > 0 else 'cloud-sync', theme_text_color='Custom', text_color=icon_color, font_size='45sp', pos_hint={'center_y': 0.5}))
+
         header_text = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
-        header_text.add_widget(MDLabel(text='Mise à jour terminée', font_style='Subtitle1', bold=True, theme_text_color='Custom', text_color=(0.1, 0.1, 0.1, 1)))
-        header_text.add_widget(MDLabel(text=f'Total Catalogue Unifié : {master_total}', font_style='H6', bold=True, theme_text_color='Custom', text_color=icon_color))
+        header_text.add_widget(MDLabel(text='Mise à jour terminée', font_style='H6', bold=True, theme_text_color='Custom', text_color=icon_color))
+        
         header_card.add_widget(header_text)
         content.add_widget(header_card)
+
         content.add_widget(MDLabel(text='Détails des opérations par magasin :', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20)))
+
         scroll = MDScrollView()
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[0, dp(5), 0, dp(15)])
+
         if not report_data:
             list_layout.add_widget(MDLabel(text='Aucune donnée disponible.', halign='center', theme_text_color='Hint'))
+
         sorted_report = sorted(report_data.items(), key=lambda x: str(x[1].get('name', '')).lower())
+
         for i, r_data in sorted_report:
             s_name = self.fix_text(str(r_data.get('name', 'Magasin')))
             s_added = int(r_data.get('added', 0))
             s_updated = int(r_data.get('updated', 0))
-            s_total = int(r_data.get('total', 0))
             s_status = str(r_data.get('status', 'Erreur'))
+
             is_offline = 'Hors ligne' in s_status or 'Erreur' in s_status
+
             store_card = MDCard(orientation='vertical', padding=[dp(15), dp(15)], spacing=dp(10), size_hint_y=None, height=dp(110), radius=[12], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
+
             top_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(30))
             top_row.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='24sp', size_hint_x=None, width=dp(30)))
             top_row.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle1', theme_text_color='Primary'))
-            if not is_offline:
-                top_row.add_widget(MDLabel(text=f'Total: {s_total}', halign='right', font_style='Caption', bold=True, theme_text_color='Secondary'))
+            
             store_card.add_widget(top_row)
             store_card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(1), md_bg_color=(0.95, 0.95, 0.95, 1)))
+
             stats_row = MDBoxLayout(orientation='horizontal', spacing=dp(10))
+
             if is_offline:
                 stats_row.add_widget(MDLabel(text=s_status, font_style='Subtitle2', theme_text_color='Error', halign='center'))
             else:
@@ -1070,21 +1088,27 @@ class StockApp(MDApp):
                 box_add.add_widget(MDIcon(icon='plus-circle', theme_text_color='Custom', text_color=(0, 0.6, 0, 1) if s_added > 0 else (0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(20)))
                 box_add.add_widget(MDLabel(text=f'+{s_added} Nouveaux', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0, 0.5, 0, 1) if s_added > 0 else (0.4, 0.4, 0.4, 1), pos_hint={'center_y': 0.5}))
                 badge_add.add_widget(box_add)
+
                 badge_upd = MDCard(radius=[8], md_bg_color=(0.9, 0.95, 1, 1) if s_updated > 0 else (0.95, 0.95, 0.95, 1), elevation=0, padding=[dp(5), 0])
                 box_upd = MDBoxLayout(orientation='horizontal', spacing=dp(5), pos_hint={'center_y': 0.5})
                 box_upd.add_widget(MDIcon(icon='update', theme_text_color='Custom', text_color=(0, 0.4, 0.8, 1) if s_updated > 0 else (0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(20)))
                 box_upd.add_widget(MDLabel(text=f'{s_updated} Mis à jour', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0, 0.3, 0.7, 1) if s_updated > 0 else (0.4, 0.4, 0.4, 1), pos_hint={'center_y': 0.5}))
                 badge_upd.add_widget(box_upd)
+
                 stats_row.add_widget(badge_add)
                 stats_row.add_widget(badge_upd)
+
             store_card.add_widget(stats_row)
             list_layout.add_widget(store_card)
+
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
+
         btn_box = MDBoxLayout(size_hint_y=None, height=dp(55), padding=[0, dp(5), 0, 0])
         btn_close = MDRaisedButton(text='TERMINER', font_size='18sp', size_hint_x=1, size_hint_y=1, md_bg_color=(0.1, 0.1, 0.1, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
         btn_box.add_widget(btn_close)
         content.add_widget(btn_box)
+
         self.sync_report_dialog = MDDialog(title='', type='custom', content_cls=content, size_hint=(0.95, None), radius=[20, 20, 20, 20], auto_dismiss=False)
         self.sync_report_dialog.open()
 
