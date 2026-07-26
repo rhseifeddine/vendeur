@@ -519,7 +519,7 @@ class ProductRecycleView(RecycleView):
         self.data = []
 
     def on_scroll_y(self, instance, value):
-        if value <= 0.2 and (not self.loading_lock) and (not MDApp.get_running_app().is_loading_more):
+        if value <= 0.02 and (not self.loading_lock) and (not MDApp.get_running_app().is_loading_more):
             app = MDApp.get_running_app()
             if app and app.current_page_offset < len(app.current_product_list_source):
                 self.loading_lock = True
@@ -1014,72 +1014,52 @@ class StockApp(MDApp):
         from kivymd.uix.dialog import MDDialog
         from kivy.metrics import dp
         from kivy.core.window import Window
-
         self.is_syncing_articles = False
-
         if hasattr(self, 'loading_sync_dialog') and self.loading_sync_dialog:
             try:
                 self.loading_sync_dialog.dismiss()
                 self.loading_sync_dialog = None
             except:
                 pass
-
         if hasattr(self, 'sync_report_dialog') and self.sync_report_dialog:
             try:
                 self.sync_report_dialog.dismiss()
                 self.sync_report_dialog = None
             except:
                 pass
-
         dialog_height = min(Window.height * 0.85, dp(680))
         content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dialog_height, spacing=dp(15), padding=[dp(5), dp(10), dp(5), dp(5)])
-
         master_total = 0
         for k, v in report_data.items():
             if int(v.get('total', 0)) > 0:
                 master_total = int(v.get('total', 0))
                 break
-
         header_card = MDCard(orientation='horizontal', padding=dp(15), spacing=dp(15), size_hint_y=None, height=dp(70), radius=[15], elevation=0, md_bg_color=(0.9, 0.96, 1, 1) if master_total > 0 else (0.95, 0.95, 0.95, 1))
         icon_color = (0, 0.5, 0.9, 1) if master_total > 0 else (0.4, 0.4, 0.4, 1)
-
         header_card.add_widget(MDIcon(icon='cloud-check' if master_total > 0 else 'cloud-sync', theme_text_color='Custom', text_color=icon_color, font_size='45sp', pos_hint={'center_y': 0.5}))
-
         header_text = MDBoxLayout(orientation='vertical', pos_hint={'center_y': 0.5}, spacing=dp(2))
         header_text.add_widget(MDLabel(text='Mise à jour terminée', font_style='H6', bold=True, theme_text_color='Custom', text_color=icon_color))
-        
         header_card.add_widget(header_text)
         content.add_widget(header_card)
-
         content.add_widget(MDLabel(text='Détails des opérations par magasin :', font_style='Caption', theme_text_color='Secondary', size_hint_y=None, height=dp(20)))
-
         scroll = MDScrollView()
         list_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(12), padding=[0, dp(5), 0, dp(15)])
-
         if not report_data:
             list_layout.add_widget(MDLabel(text='Aucune donnée disponible.', halign='center', theme_text_color='Hint'))
-
         sorted_report = sorted(report_data.items(), key=lambda x: str(x[1].get('name', '')).lower())
-
         for i, r_data in sorted_report:
             s_name = self.fix_text(str(r_data.get('name', 'Magasin')))
             s_added = int(r_data.get('added', 0))
             s_updated = int(r_data.get('updated', 0))
             s_status = str(r_data.get('status', 'Erreur'))
-
             is_offline = 'Hors ligne' in s_status or 'Erreur' in s_status
-
             store_card = MDCard(orientation='vertical', padding=[dp(15), dp(15)], spacing=dp(10), size_hint_y=None, height=dp(110), radius=[12], elevation=1, md_bg_color=(1, 1, 1, 1) if not is_offline else (1, 0.9, 0.9, 1))
-
             top_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(30))
             top_row.add_widget(MDIcon(icon='store-remove' if is_offline else 'store-check', theme_text_color='Custom', text_color=(0.8, 0, 0, 1) if is_offline else (0, 0.6, 0.3, 1), font_size='24sp', size_hint_x=None, width=dp(30)))
             top_row.add_widget(MDLabel(text=s_name, bold=True, font_style='Subtitle1', theme_text_color='Primary'))
-            
             store_card.add_widget(top_row)
             store_card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(1), md_bg_color=(0.95, 0.95, 0.95, 1)))
-
             stats_row = MDBoxLayout(orientation='horizontal', spacing=dp(10))
-
             if is_offline:
                 stats_row.add_widget(MDLabel(text=s_status, font_style='Subtitle2', theme_text_color='Error', halign='center'))
             else:
@@ -1088,27 +1068,21 @@ class StockApp(MDApp):
                 box_add.add_widget(MDIcon(icon='plus-circle', theme_text_color='Custom', text_color=(0, 0.6, 0, 1) if s_added > 0 else (0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(20)))
                 box_add.add_widget(MDLabel(text=f'+{s_added} Nouveaux', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0, 0.5, 0, 1) if s_added > 0 else (0.4, 0.4, 0.4, 1), pos_hint={'center_y': 0.5}))
                 badge_add.add_widget(box_add)
-
                 badge_upd = MDCard(radius=[8], md_bg_color=(0.9, 0.95, 1, 1) if s_updated > 0 else (0.95, 0.95, 0.95, 1), elevation=0, padding=[dp(5), 0])
                 box_upd = MDBoxLayout(orientation='horizontal', spacing=dp(5), pos_hint={'center_y': 0.5})
                 box_upd.add_widget(MDIcon(icon='update', theme_text_color='Custom', text_color=(0, 0.4, 0.8, 1) if s_updated > 0 else (0.5, 0.5, 0.5, 1), font_size='18sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(20)))
                 box_upd.add_widget(MDLabel(text=f'{s_updated} Mis à jour', font_style='Caption', bold=True, theme_text_color='Custom', text_color=(0, 0.3, 0.7, 1) if s_updated > 0 else (0.4, 0.4, 0.4, 1), pos_hint={'center_y': 0.5}))
                 badge_upd.add_widget(box_upd)
-
                 stats_row.add_widget(badge_add)
                 stats_row.add_widget(badge_upd)
-
             store_card.add_widget(stats_row)
             list_layout.add_widget(store_card)
-
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
-
         btn_box = MDBoxLayout(size_hint_y=None, height=dp(55), padding=[0, dp(5), 0, 0])
         btn_close = MDRaisedButton(text='TERMINER', font_size='18sp', size_hint_x=1, size_hint_y=1, md_bg_color=(0.1, 0.1, 0.1, 1), text_color=(1, 1, 1, 1), elevation=2, on_release=lambda x: [self.sync_report_dialog.dismiss(), self.fetch_products()])
         btn_box.add_widget(btn_close)
         content.add_widget(btn_box)
-
         self.sync_report_dialog = MDDialog(title='', type='custom', content_cls=content, size_hint=(0.95, None), radius=[20, 20, 20, 20], auto_dismiss=False)
         self.sync_report_dialog.open()
 
@@ -1203,7 +1177,12 @@ class StockApp(MDApp):
             if active_idx < len(servers):
                 local_name = servers[active_idx].get('name', 'Magasin Local')
         from datetime import datetime
+        import time
+        import random
         creation_timestamp = str(datetime.now())
+
+        def generate_pair_id():
+            return f'[ID:TR-{int(time.time())}-{random.randint(1000, 9999)}]'
 
         def build_payload(doc_type, notes, items, entity_name, loc='store', is_exchange=False):
             total_amt = sum((float(i['qty']) * float(i['price']) for i in items))
@@ -1214,14 +1193,16 @@ class StockApp(MDApp):
             i_local = build_items_payload(self.cart, False)
             i_remote = build_items_payload(self.cart, True)
             if not validation_error:
-                local_payloads.append(build_payload('BS', f'Envoi vers: {target_name}', i_local, target_name, self.selected_location))
-                remote_payloads.append(build_payload('BA', f'Réception auto depuis: {local_name}', i_remote, local_name, 'store'))
+                pair_id = generate_pair_id()
+                local_payloads.append(build_payload('BS', f'Envoi vers: {target_name} {pair_id}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('BA', f'Réception auto depuis: {local_name} {pair_id}', i_remote, local_name, 'store'))
         elif self.current_mode == 'remote_transfer_in':
             i_local = build_items_payload(self.cart, False)
             i_remote = build_items_payload(self.cart, True)
             if not validation_error:
-                local_payloads.append(build_payload('BA', f'Réception depuis: {target_name}', i_local, target_name, self.selected_location))
-                remote_payloads.append(build_payload('BS', f'Envoi auto vers: {local_name}', i_remote, local_name, 'store'))
+                pair_id = generate_pair_id()
+                local_payloads.append(build_payload('BA', f'Réception depuis: {target_name} {pair_id}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('BS', f'Envoi auto vers: {local_name} {pair_id}', i_remote, local_name, 'store'))
         elif self.current_mode == 'remote_exchange':
             i_out_l = build_items_payload(getattr(self, 'exchange_sent_cart', []), False)
             i_out_r = build_items_payload(getattr(self, 'exchange_sent_cart', []), True)
@@ -1229,23 +1210,27 @@ class StockApp(MDApp):
             i_in_r = build_items_payload(self.cart, True)
             if not validation_error:
                 if i_out_l:
-                    local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name}', i_out_l, target_name, self.selected_location, True))
-                    remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name}', i_out_r, local_name, 'store', True))
+                    pair_id_1 = generate_pair_id()
+                    local_payloads.append(build_payload('BS', f'Échange Sortie vers: {target_name} {pair_id_1}', i_out_l, target_name, self.selected_location, True))
+                    remote_payloads.append(build_payload('BA', f'Échange Entrée auto depuis: {local_name} {pair_id_1}', i_out_r, local_name, 'store', True))
                 if i_in_l:
-                    local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name}', i_in_l, target_name, self.selected_location, True))
-                    remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name}', i_in_r, local_name, 'store', True))
+                    pair_id_2 = generate_pair_id()
+                    local_payloads.append(build_payload('BA', f'Échange Entrée depuis: {target_name} {pair_id_2}', i_in_l, target_name, self.selected_location, True))
+                    remote_payloads.append(build_payload('BS', f'Échange Sortie auto vers: {local_name} {pair_id_2}', i_in_r, local_name, 'store', True))
         elif self.current_mode == 'remote_return_client':
             i_local = build_items_payload(self.cart, False)
             i_remote = build_items_payload(self.cart, True)
             if not validation_error:
-                local_payloads.append(build_payload('RC', f'Retour Client de: {target_name}', i_local, target_name, self.selected_location))
-                remote_payloads.append(build_payload('RF', f'Retour Fourn. auto vers: {local_name}', i_remote, local_name, 'store'))
+                pair_id = generate_pair_id()
+                local_payloads.append(build_payload('RC', f'Retour Client de: {target_name} {pair_id}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('RF', f'Retour Fourn. auto vers: {local_name} {pair_id}', i_remote, local_name, 'store'))
         elif self.current_mode == 'remote_return_supplier':
             i_local = build_items_payload(self.cart, False)
             i_remote = build_items_payload(self.cart, True)
             if not validation_error:
-                local_payloads.append(build_payload('RF', f'Retour Fournisseur vers: {target_name}', i_local, target_name, self.selected_location))
-                remote_payloads.append(build_payload('RC', f'Retour Client auto depuis: {local_name}', i_remote, local_name, 'store'))
+                pair_id = generate_pair_id()
+                local_payloads.append(build_payload('RF', f'Retour Fournisseur vers: {target_name} {pair_id}', i_local, target_name, self.selected_location))
+                remote_payloads.append(build_payload('RC', f'Retour Client auto depuis: {local_name} {pair_id}', i_remote, local_name, 'store'))
         if validation_error:
             self.is_transaction_in_progress = False
             from kivymd.uix.dialog import MDDialog
@@ -1303,9 +1288,12 @@ class StockApp(MDApp):
         import threading
         import requests
         import urllib3
+        import json
         from kivy.clock import Clock
         from kivy.metrics import dp
         from kivy.animation import Animation
+        from kivymd.uix.button import MDFillRoundFlatButton
+        from kivy.uix.anchorlayout import AnchorLayout
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         if not hasattr(self, 'sync_engine_state') or not getattr(self, 'sync_modal', None):
             return
@@ -1315,23 +1303,49 @@ class StockApp(MDApp):
             self.sync_spinner.active = False
             self.sync_spinner.opacity = 0
             self.sync_icon.icon = 'check-circle'
-            self.sync_icon.text_color = (0, 0.7, 0, 1)
-            anim = Animation(opacity=1, font_size=dp(100), d=0.4, t='out_back')
+            self.sync_icon.text_color = (0, 0.7, 0.2, 1)
+            anim = Animation(opacity=1, font_size=dp(85), d=0.4, t='out_back')
             anim.start(self.sync_icon)
-            self.sync_modal_title.text = 'Opération Réussie !'
-            self.sync_status_label.text = 'Les deux magasins sont à jour.'
-            self.sync_status_label.theme_text_color = 'Secondary'
+            self.sync_modal_title.text = ''
+            self.sync_modal_title.size_hint_y = None
+            self.sync_modal_title.height = 0
+            total_items_sent = 0
+            total_items_received = 0
+            total_qty_sent = 0.0
+            for req in reqs:
+                if req['type'] == 'remote':
+                    items = req['payload'].get('items', [])
+                    total_items_sent += len(items)
+                    total_qty_sent += sum([float(i.get('qty', 0)) for i in items])
+                    total_items_received += int(req.get('server_saved_count', 0))
+            qty_str = str(int(total_qty_sent)) if total_qty_sent.is_integer() else f'{total_qty_sent:.2f}'
+            target_name = getattr(self, 'target_remote_server', {}).get('name', 'Magasin Distant')
+            self.sync_status_label.markup = True
+            self.sync_status_label.halign = 'center'
+            detail_msg = f'[color=#009933][size=18sp][b]Opération Réussie (100%)[/b][/size][/color]\n\n[color=#34495E][b]Destination :[/b] {target_name}[/color]\n[color=#2980B9][b]Articles envoyés :[/b] {total_items_sent} produit(s)[/color]\n[color=#27AE60][b]Articles reçus :[/b] {total_items_received} produit(s)[/color]\n[color=#E67E22][b]Quantité totale :[/b] {qty_str}[/color]\n\n[b][color=#1D8348]Correspondance parfaite ![/color][/b]'
+            self.sync_status_label.text = detail_msg
+            self.sync_status_label.size_hint_y = None
+            self.sync_status_label.height = dp(160)
+            self.sync_modal_card.size_hint_y = None
+            self.sync_modal_card.height = dp(350)
+            self.sync_modal.height = dp(350)
 
-            def finish_all(dt):
+            def finish_all_manual(inst):
                 if getattr(self, 'sync_modal', None):
                     self.sync_modal.dismiss()
                 self.is_transaction_in_progress = False
-                self.notify('Transfert terminé avec succès ✅', 'success')
+                self.notify(f'Transfert exact : {total_items_sent} articles', 'success')
                 self.cart = []
                 self.exchange_sent_cart = []
                 self.update_cart_button()
                 self.go_back()
-            Clock.schedule_once(finish_all, 1.5)
+            self.sync_btn_box.clear_widgets()
+            anchor_layout = AnchorLayout(anchor_x='center', anchor_y='center')
+            btn_terminer = MDFillRoundFlatButton(text="TERMINER L'OPÉRATION", font_size='15sp', font_name='RobotoBold', md_bg_color=(0, 0.6, 0.2, 1), on_release=finish_all_manual)
+            anchor_layout.add_widget(btn_terminer)
+            self.sync_btn_box.add_widget(anchor_layout)
+            self.sync_btn_box.height = dp(55)
+            self.sync_btn_box.opacity = 1
             return
         current_req = reqs[idx]
         total_steps = len(reqs)
@@ -1341,8 +1355,12 @@ class StockApp(MDApp):
         self.sync_spinner.opacity = 1
         self.sync_icon.opacity = 0
         self.sync_modal_title.text = f'Étape {current_step}/{total_steps}'
-        self.sync_status_label.text = f'Envoi des données vers {target_str}...'
+        self.sync_modal_title.theme_text_color = 'Primary'
+        step_items_count = len(current_req['payload'].get('items', []))
+        self.sync_status_label.markup = False
+        self.sync_status_label.text = f'Envoi de {step_items_count} articles vers {target_str}...\nVeuillez patienter.'
         self.sync_status_label.theme_text_color = 'Secondary'
+        self.sync_status_label.bold = False
 
         def worker_thread():
             final_headers = current_req['headers'].copy()
@@ -1354,45 +1372,65 @@ class StockApp(MDApp):
             final_headers['User-Agent'] = 'MagProMobile/Android'
             final_headers['Accept'] = 'application/json'
             try:
-                res = requests.post(current_req['url'], json=current_req['payload'], headers=final_headers, timeout=35.0, verify=False, allow_redirects=False)
+                json_payload = json.dumps(current_req['payload'])
+            except Exception:
+                Clock.schedule_once(lambda dt: handle_fail("Le système n'a pas pu préparer les articles."), 0)
+                return
+            try:
+                res = requests.post(current_req['url'], data=json_payload, headers=final_headers, timeout=(10.0, 45.0), verify=False, allow_redirects=False)
                 if res.status_code in [200, 201]:
                     try:
                         result = res.json()
                         if result.get('status') == 'success':
+                            if 'saved_count' in result:
+                                if int(result['saved_count']) != step_items_count:
+                                    Clock.schedule_once(lambda dt: handle_fail('Erreur : Le magasin a reçu les articles de façon incomplète. Veuillez réessayer.'), 0)
+                                    return
                             Clock.schedule_once(lambda dt: handle_success(result), 0)
                         else:
-                            error_msg = result.get('message', 'Refusé par le serveur.')
-                            Clock.schedule_once(lambda dt: handle_fail(f'Opération refusée : {error_msg}'), 0)
-                    except:
-                        Clock.schedule_once(lambda dt: handle_fail('Le serveur a répondu de manière incompréhensible.'), 0)
-                elif res.status_code == 405:
-                    Clock.schedule_once(lambda dt: handle_fail("Erreur 405: L'adresse du magasin est incorrecte ou redirige vers un lien bloqué."), 0)
-                elif res.status_code in [301, 302, 307, 308]:
-                    Clock.schedule_once(lambda dt: handle_fail("Problème de lien (Redirection). Vérifiez l'adresse web du magasin."), 0)
+                            error_msg = result.get('message', 'Opération refusée.')
+                            Clock.schedule_once(lambda dt: handle_fail(f'{error_msg}'), 0)
+                    except ValueError:
+                        Clock.schedule_once(lambda dt: handle_fail("La connexion a été coupée pendant l'enregistrement."), 0)
+                elif res.status_code in [502, 503, 504]:
+                    Clock.schedule_once(lambda dt: handle_fail('Le magasin distant redémarre ou sa connexion est faible.\nVeuillez patienter un instant puis réessayer.'), 0)
                 else:
-                    Clock.schedule_once(lambda dt: handle_fail(f'Erreur du serveur (Code {res.status_code}). Veuillez réessayer.'), 0)
+                    Clock.schedule_once(lambda dt: handle_fail("Le magasin distant est injoignable ou fermé.\nVérifiez qu'il est bien allumé et connecté à Internet."), 0)
             except requests.exceptions.Timeout:
-                Clock.schedule_once(lambda dt: handle_fail('La connexion Internet est trop lente ou coupée.'), 0)
+                Clock.schedule_once(lambda dt: handle_fail("Connexion Internet très lente. Le temps d'attente est dépassé.\nVeuillez réessayer."), 0)
             except requests.exceptions.ConnectionError:
-                Clock.schedule_once(lambda dt: handle_fail('Impossible de joindre le magasin. Vérifiez votre Wifi ou 4G.'), 0)
-            except Exception as e:
-                Clock.schedule_once(lambda dt: handle_fail("Une erreur inattendue s'est produite lors de l'envoi."), 0)
+                Clock.schedule_once(lambda dt: handle_fail("Impossible de contacter l'autre magasin.\nVérifiez la connexion Internet ou le Wifi."), 0)
+            except requests.exceptions.ChunkedEncodingError:
+                Clock.schedule_once(lambda dt: handle_fail('La transmission a été coupée. Veuillez réessayer.'), 0)
+            except Exception:
+                Clock.schedule_once(lambda dt: handle_fail("Un problème technique a empêché l'envoi."), 0)
 
         def handle_success(result):
             current_req['server_id'] = result.get('server_id')
+            current_req['server_saved_count'] = result.get('saved_count', 0)
+            current_req['invoice_number'] = result.get('invoice_number', 'Inconnu')
             self.sync_engine_state['current_index'] += 1
             self._process_next_sync_request()
 
-        def handle_fail(error_msg):
+        def handle_fail(simple_error_msg):
             self.sync_spinner.active = False
             self.sync_spinner.opacity = 0
-            self.sync_icon.icon = 'alert-circle'
-            self.sync_icon.text_color = (0.8, 0.1, 0.1, 1)
-            self.sync_icon.font_size = '70sp'
+            self.sync_icon.icon = 'close-circle'
+            self.sync_icon.text_color = (0.9, 0.1, 0.1, 1)
+            self.sync_icon.font_size = dp(75)
             self.sync_icon.opacity = 1
-            self.sync_modal_title.text = 'Problème de Connexion'
-            self.sync_status_label.text = f'{error_msg}'
-            self.sync_status_label.theme_text_color = 'Error'
+            self.sync_modal_title.text = ''
+            self.sync_modal_title.size_hint_y = None
+            self.sync_modal_title.height = 0
+            self.sync_status_label.markup = True
+            self.sync_status_label.halign = 'center'
+            formatted_error = f'[color=#C0392B][size=18sp][b]Échec du Transfert[/b][/size][/color]\n\n[color=#34495E][b]{simple_error_msg}[/b][/color]'
+            self.sync_status_label.text = formatted_error
+            self.sync_status_label.size_hint_y = None
+            self.sync_status_label.height = dp(130)
+            self.sync_modal_card.size_hint_y = None
+            self.sync_modal_card.height = dp(320)
+            self.sync_modal.height = dp(320)
             self.sync_btn_box.height = dp(50)
             self.sync_btn_box.opacity = 1
             self.sync_btn_cancel.disabled = False
@@ -1409,8 +1447,9 @@ class StockApp(MDApp):
         self.sync_spinner.opacity = 1
         self.sync_icon.opacity = 0
         self.sync_modal_title.text = 'Nouvelle tentative...'
-        self.sync_status_label.text = 'Reconnexion en cours...'
+        self.sync_status_label.text = "Renvoi intégral des données pour garantir 100% d'exactitude..."
         self.sync_status_label.theme_text_color = 'Secondary'
+        self.sync_status_label.bold = False
         Clock.schedule_once(lambda dt: self._process_next_sync_request(), 0.5)
 
     def _on_sync_cancel_clicked(self, instance):
@@ -1422,47 +1461,53 @@ class StockApp(MDApp):
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         self.sync_btn_cancel.disabled = True
         self.sync_btn_retry.disabled = True
-        self.sync_modal_title.text = 'Annulation...'
-        self.sync_status_label.text = 'Nettoyage en cours. Veuillez ne pas fermer...'
+        self.sync_modal_title.text = 'Annulation Sécurisée...'
+        self.sync_status_label.markup = False
+        self.sync_status_label.text = "Suppression des traces incomplètes. Ne quittez pas l'application !"
         self.sync_status_label.theme_text_color = 'Error'
+        self.sync_status_label.bold = True
         self.sync_spinner.active = True
         self.sync_spinner.opacity = 1
         self.sync_icon.opacity = 0
         reqs = getattr(self, 'sync_engine_state', {}).get('reqs', [])
         completed_reqs = [r for r in reqs if r.get('server_id') is not None]
         if not completed_reqs:
-            self._finish_rollback(0, 0)
+            self._finish_rollback([], [])
             return
 
         def rollback_worker():
-            success_count = 0
-            fail_count = 0
+            success_list = []
+            fail_list = []
             for r in completed_reqs:
                 try:
                     base_url = r['url'].split('/api/')[0]
                     del_url = f'{base_url}/api/delete_transaction'
                     is_tr = r['doc_type'] == 'TR'
                     payload = {'server_id': r['server_id'], 'is_transfer': is_tr}
-                    res = requests.post(del_url, json=payload, headers=r['headers'], timeout=10.0, verify=False)
+                    inv_num = r.get('invoice_number', r.get('doc_type', 'Inconnu'))
+                    res = requests.post(del_url, json=payload, headers=r['headers'], timeout=15.0, verify=False)
                     if res.status_code == 200 and res.json().get('status') == 'success':
-                        success_count += 1
+                        success_list.append(inv_num)
                         r['server_id'] = None
                     else:
-                        fail_count += 1
+                        fail_list.append(inv_num)
                 except Exception as e:
-                    fail_count += 1
-            Clock.schedule_once(lambda dt: self._finish_rollback(success_count, fail_count), 0)
+                    inv_num = r.get('invoice_number', r.get('doc_type', 'Inconnu'))
+                    fail_list.append(inv_num)
+            Clock.schedule_once(lambda dt: self._finish_rollback(success_list, fail_list), 0)
         threading.Thread(target=rollback_worker, daemon=True).start()
 
-    def _finish_rollback(self, success_count, fail_count):
+    def _finish_rollback(self, success_list, fail_list):
         if getattr(self, 'sync_modal', None):
             self.sync_modal.dismiss()
         self.is_transaction_in_progress = False
-        if fail_count > 0:
-            self.notify(f'Annulation partielle. {fail_count} erreur(s) de réseau.', 'error')
+        if len(fail_list) > 0:
+            self.notify(f'Annulation partielle. {len(fail_list)} erreur(s).', 'error')
             from kivymd.uix.dialog import MDDialog
             from kivymd.uix.button import MDFlatButton
-            self.rollback_warn_dialog = MDDialog(title='Attention (Connexion Perdue)', text="La connexion a été perdue pendant l'annulation.\nCertaines opérations partielles n'ont pas pu être supprimées du serveur.\nVeuillez vérifier manuellement l'historique.", buttons=[MDFlatButton(text='OK', theme_text_color='Error', on_release=lambda x: getattr(self, 'rollback_warn_dialog').dismiss())])
+            failed_docs_str = '\n'.join([f'- {doc}' for doc in fail_list])
+            msg = f"La connexion a été complètement perdue pendant l'annulation.\nLes documents suivants ont été créés mais n'ont pas pu être supprimés automatiquement :\n\n[b]{failed_docs_str}[/b]\n\nVeuillez aller dans l'historique et supprimer ces documents manuellement pour équilibrer le stock."
+            self.rollback_warn_dialog = MDDialog(title='⚠️ Attention (Action Requise)', text=msg, buttons=[MDFlatButton(text='COMPRIS', theme_text_color='Error', on_release=lambda x: getattr(self, 'rollback_warn_dialog').dismiss())])
             self.rollback_warn_dialog.open()
         else:
             self.notify("Opération complètement annulée. Rien n'a été enregistré.", 'warning')
@@ -1529,8 +1574,10 @@ class StockApp(MDApp):
             return
         self.is_loading_more = True
         start = self.current_page_offset
-        end = min(start + 30, total_items)
+        self.batch_size = 100
+        end = min(start + self.batch_size, total_items)
         batch = self.current_product_list_source[start:end]
+        import threading
         threading.Thread(target=self._process_batch_data, args=(batch, reset), daemon=True).start()
 
     def get_cached_image_url(self, image_path_from_server):
@@ -1723,6 +1770,10 @@ class StockApp(MDApp):
             dialog_title = 'Retour Fournisseur (Vers Magasin)'
             theme_color = (0.8, 0.1, 0.5, 1)
             bg_color = (1, 0.88, 0.95, 1)
+        elif mode_transfert == 'remote_history':
+            dialog_title = 'Historique des Transferts (Magasin)'
+            theme_color = (0.4, 0.2, 0.6, 1)
+            bg_color = (0.95, 0.9, 1, 1)
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.card import MDCard
         from kivymd.uix.label import MDIcon, MDLabel
@@ -1903,6 +1954,9 @@ class StockApp(MDApp):
         if hasattr(self, 'remote_transfer_dialog') and self.remote_transfer_dialog:
             self.remote_transfer_dialog.dismiss()
             self.remote_transfer_dialog = None
+        if mode_transfert == 'remote_history':
+            self.show_split_history_dialog(target_server, working_url)
+            return
         self.target_remote_server = target_server
         self.target_remote_url = working_url
         self.exchange_step = 1
@@ -1928,6 +1982,356 @@ class StockApp(MDApp):
             self.notify(f"Connexion à {target_server.get('name')}...", 'info')
             self._fetch_remote_products_for_transfer(mode_transfert)
         Clock.schedule_once(switch_and_fetch, 0.2)
+
+    def show_split_history_dialog(self, target_server, working_url):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.label import MDLabel
+        from kivymd.uix.button import MDFlatButton, MDIconButton, MDRaisedButton
+        from kivymd.uix.scrollview import MDScrollView
+        from kivy.metrics import dp
+        from datetime import datetime
+        if hasattr(self, 'split_hist_dialog') and getattr(self, 'split_hist_dialog', None):
+            self.split_hist_dialog.dismiss()
+        self._split_target_server = target_server
+        self._split_working_url = working_url
+        self.local_name = 'Magasin Local'
+        self.local_pin = ''
+        if self.store.exists('servers_config'):
+            data = self.store.get('servers_config')
+            active_idx = data.get('active_index', 0)
+            servers = data.get('list', [])
+            if active_idx < len(servers):
+                self.local_name = servers[active_idx].get('name', 'Magasin Local')
+        if self.store.exists('config'):
+            self.local_pin = self.store.get('config').get('server_pin', '')
+        self.remote_name = target_server.get('name', 'Magasin Distant')
+        self.remote_pin = target_server.get('pin', '')
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, height=dp(620))
+        header = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40))
+        header.add_widget(MDLabel(text='Miroir des Transferts', font_style='Subtitle1', bold=True, theme_text_color='Primary'))
+        btn_refresh = MDIconButton(icon='refresh', theme_text_color='Custom', text_color=self.theme_cls.primary_color, on_release=lambda x: self._trigger_split_fetch())
+        header.add_widget(btn_refresh)
+        content.add_widget(header)
+        filter_container = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(5), padding=[0, dp(5), 0, dp(10)])
+        row1 = MDBoxLayout(orientation='horizontal', spacing=dp(2), size_hint_y=None, height=dp(38))
+        self.btn_split_today = MDRaisedButton(text='AUJ', elevation=0, size_hint_x=1, font_size='11sp', on_release=lambda x: self._set_split_date_filter('auj'))
+        self.btn_split_yesterday = MDRaisedButton(text='HIE', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self._set_split_date_filter('hier'))
+        self.btn_split_week = MDRaisedButton(text='SEM', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self._set_split_date_filter('semaine'))
+        self.btn_split_month = MDRaisedButton(text='MOI', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self._set_split_date_filter('mois'))
+        self.btn_split_date = MDRaisedButton(text='CAL', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self._open_split_date_picker)
+        row1.add_widget(self.btn_split_today)
+        row1.add_widget(self.btn_split_yesterday)
+        row1.add_widget(self.btn_split_week)
+        row1.add_widget(self.btn_split_month)
+        row1.add_widget(self.btn_split_date)
+        filter_container.add_widget(row1)
+        content.add_widget(filter_container)
+        split_header = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(35), spacing=dp(5))
+        box_local = MDBoxLayout(md_bg_color=(0.9, 0.95, 1, 1), radius=[5])
+        lbl_local = MDLabel(text=self.fix_text(self.local_name), font_style='Caption', bold=True, halign='center', theme_text_color='Primary')
+        box_local.add_widget(lbl_local)
+        box_remote = MDBoxLayout(md_bg_color=(0.95, 0.9, 1, 1), radius=[5])
+        lbl_remote = MDLabel(text=self.fix_text(self.remote_name), font_style='Caption', bold=True, halign='center', theme_text_color='Primary')
+        box_remote.add_widget(lbl_remote)
+        split_header.add_widget(box_local)
+        split_header.add_widget(box_remote)
+        content.add_widget(split_header)
+        scroll = MDScrollView()
+        self.split_list_layout = MDBoxLayout(orientation='vertical', spacing=dp(10), adaptive_height=True, padding=dp(5))
+        scroll.add_widget(self.split_list_layout)
+        content.add_widget(scroll)
+        self.split_hist_dialog = MDDialog(title='', type='custom', content_cls=content, size_hint=(0.98, 0.95), radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='FERMER', theme_text_color='Error', on_release=lambda x: self.split_hist_dialog.dismiss())])
+        self.split_hist_dialog.open()
+        self._set_split_date_filter('auj')
+
+    def _open_split_date_picker(self, instance):
+        from kivymd.uix.pickers import MDDatePicker
+        date_dialog = MDDatePicker(mode='range')
+        date_dialog.bind(on_save=self._on_split_date_save)
+        date_dialog.open()
+
+    def _on_split_date_save(self, instance, value, date_range):
+        if date_range and len(date_range) > 0:
+            start_date = date_range[0]
+            end_date = date_range[-1]
+            self._set_split_date_filter('custom', start_date, end_date)
+        else:
+            self._set_split_date_filter('custom', value, value)
+
+    def _set_split_date_filter(self, filter_type, start_date=None, end_date=None):
+        from datetime import datetime, timedelta
+        from kivy.clock import Clock
+        inactive_color = (0.5, 0.5, 0.5, 1)
+        active_color = self.theme_cls.primary_color
+        buttons = [self.btn_split_today, self.btn_split_yesterday, self.btn_split_week, self.btn_split_month, self.btn_split_date]
+        for btn in buttons:
+            btn.md_bg_color = inactive_color
+        today = datetime.now().date()
+        if filter_type == 'custom' and start_date and end_date:
+            self._split_start_date = start_date
+            self._split_end_date = end_date
+            self.btn_split_date.md_bg_color = active_color
+            if start_date == end_date:
+                self.btn_split_date.text = start_date.strftime('%d/%m')
+            else:
+                self.btn_split_date.text = 'CAL'
+        else:
+            self.btn_split_date.text = 'CAL'
+            if filter_type == 'auj':
+                self._split_start_date = today
+                self._split_end_date = today
+                self.btn_split_today.md_bg_color = active_color
+            elif filter_type == 'hier':
+                yesterday = today - timedelta(days=1)
+                self._split_start_date = yesterday
+                self._split_end_date = yesterday
+                self.btn_split_yesterday.md_bg_color = active_color
+            elif filter_type == 'semaine':
+                self._split_start_date = today - timedelta(days=7)
+                self._split_end_date = today
+                self.btn_split_week.md_bg_color = active_color
+            elif filter_type == 'mois':
+                self._split_start_date = today - timedelta(days=30)
+                self._split_end_date = today
+                self.btn_split_month.md_bg_color = active_color
+        Clock.schedule_once(lambda dt: self._trigger_split_fetch(), 0.05)
+
+    def _trigger_split_fetch(self):
+        self._fetch_split_history(self._split_target_server, self._split_working_url, self.local_name, self.remote_name, self.local_pin, self.remote_pin, str(self._split_start_date), str(self._split_end_date))
+
+    def _fetch_split_history(self, target_server, working_url, local_name, remote_name, local_pin, remote_pin, start_date_str, end_date_str):
+        import requests
+        import threading
+        from kivy.clock import Clock
+        from kivymd.uix.label import MDLabel
+        from kivymd.uix.card import MDCard
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivy.metrics import dp
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        self.split_list_layout.clear_widgets()
+        if start_date_str == end_date_str:
+            display_text = f'Recherche pour le : {start_date_str}...'
+        else:
+            display_text = f'Recherche du {start_date_str} au {end_date_str}...'
+        local_url = f'{self.api_base}/api/history?date={end_date_str}&start_date={start_date_str}&end_date={end_date_str}'
+        clean_remote_base = working_url.replace('/api/submit_order', '').replace('/api/ping', '')
+        remote_url = f'{clean_remote_base}/api/history?date={end_date_str}&start_date={start_date_str}&end_date={end_date_str}'
+        self.split_list_layout.add_widget(MDLabel(text=display_text, halign='center', font_style='Caption', theme_text_color='Hint', size_hint_y=None, height=dp(30)))
+
+        def render_ui(pairs):
+            self.split_list_layout.clear_widgets()
+            if not pairs:
+                self.split_list_layout.add_widget(MDLabel(text='Aucun transfert trouvé.', halign='center', font_style='Caption', theme_text_color='Hint'))
+                return
+
+            def get_real_receipt_number(item):
+                ref = str(item.get('invoice_number', ''))
+                if not ref or ref == 'None':
+                    desc_text = str(item.get('desc', ''))
+                    if len(desc_text) > 4 and any((char.isdigit() for char in desc_text)):
+                        parts = desc_text.split()
+                        for p in parts:
+                            if any((c.isdigit() for c in p)) and (not p.startswith('[ID:')):
+                                ref = p
+                                break
+                if not ref or ref == 'None':
+                    ref = str(item.get('id', ''))
+                return ref
+
+            def create_card(item, is_local):
+                if not item:
+                    return MDBoxLayout(size_hint_y=None, height=dp(85), md_bg_color=(0, 0, 0, 0.04), radius=[8])
+                doc_type = str(item.get('desc', ''))[:2].upper()
+                amount = abs(float(item.get('amount', 0)))
+                time_str = str(item.get('time', ''))
+                if ' ' in time_str:
+                    time_str = time_str.split(' ')[0][5:] + ' ' + time_str.split(' ')[1][:5]
+                ref = get_real_receipt_number(item)
+                bg_color = (1, 1, 1, 1)
+                text_color = (0.2, 0.2, 0.2, 1)
+                doc_name = doc_type
+                if doc_type == 'BS':
+                    bg_color = (1, 0.9, 0.9, 1)
+                    text_color = (0.8, 0.1, 0.1, 1)
+                    doc_name = 'Sortie'
+                elif doc_type == 'BA':
+                    bg_color = (0.9, 1, 0.9, 1)
+                    text_color = (0.1, 0.6, 0.1, 1)
+                    doc_name = 'Entrée'
+                elif doc_type == 'RC':
+                    bg_color = (1, 0.95, 0.8, 1)
+                    text_color = (0.8, 0.5, 0, 1)
+                    doc_name = 'Ret. Client'
+                elif doc_type == 'RF':
+                    bg_color = (0.9, 0.8, 1, 1)
+                    text_color = (0.5, 0, 0.8, 1)
+                    doc_name = 'Ret. Fourn.'
+                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(85), padding=dp(8), radius=[8], md_bg_color=bg_color, elevation=1, ripple_behavior=True)
+                card.bind(on_release=lambda x: self.fetch_split_item_details(item, is_local, clean_remote_base, remote_pin))
+                card.add_widget(MDLabel(text=f'{doc_name} : {ref}', bold=True, font_style='Caption', theme_text_color='Custom', text_color=text_color))
+                card.add_widget(MDLabel(text=f'{amount:.2f} DA', bold=True, font_style='Subtitle2', theme_text_color='Primary'))
+                card.add_widget(MDBoxLayout(size_hint_y=1))
+                card.add_widget(MDLabel(text=f'{time_str} • Clic pour détails', font_style='Caption', theme_text_color='Hint'))
+                return card
+            for loc_item, rem_item in pairs:
+                row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(85), spacing=dp(5))
+                row.add_widget(create_card(loc_item, is_local=True))
+                row.add_widget(create_card(rem_item, is_local=False))
+                self.split_list_layout.add_widget(row)
+
+        def worker():
+            local_data = []
+            remote_data = []
+            try:
+                headers_loc = {'Content-type': 'application/json', 'Accept': 'application/json'}
+                if local_pin:
+                    headers_loc['X-Server-PIN'] = str(local_pin)
+                res_loc = requests.get(local_url, headers=headers_loc, timeout=10, verify=False)
+                if res_loc.status_code == 200:
+                    local_data = res_loc.json()
+            except:
+                pass
+            try:
+                headers_rem = {'Content-type': 'application/json', 'Accept': 'application/json'}
+                if remote_pin:
+                    headers_rem['X-Server-PIN'] = str(remote_pin)
+                res_rem = requests.get(remote_url, headers=headers_rem, timeout=10, verify=False)
+                if res_rem.status_code == 200:
+                    remote_data = res_rem.json()
+            except:
+                pass
+
+            def is_strictly_between(item, target_name):
+                dt = str(item.get('desc', ''))[:2].upper()
+                if dt not in ['BS', 'BA', 'RC', 'RF']:
+                    return False
+                ent = str(item.get('entity', '')).lower().strip()
+                desc = str(item.get('desc', '')).lower()
+                target = target_name.lower().strip()
+                if ent == target:
+                    return True
+                ent_words = ent.split()
+                target_words = target.split()
+                if target_words and all((w in ent_words for w in target_words)):
+                    return True
+                if f'vers: {target}' in desc or f'depuis: {target}' in desc:
+                    return True
+                if '[id:tr-' in desc and target in ent:
+                    return True
+                return False
+            loc_filtered = [it for it in local_data if is_strictly_between(it, remote_name)] if local_data else []
+            rem_filtered = [it for it in remote_data if is_strictly_between(it, local_name)] if remote_data else []
+            import re
+            from datetime import datetime
+
+            def extract_sync_id(text):
+                match = re.search('\\[ID:(.*?)\\]', str(text))
+                return match.group(1) if match else None
+
+            def parse_time_safe(t_str):
+                if not t_str:
+                    return None
+                try:
+                    t_str = str(t_str).strip()
+                    if '.' in t_str:
+                        t_str = t_str.split('.')[0]
+                    if len(t_str) == 16:
+                        return datetime.strptime(t_str, '%Y-%m-%d %H:%M')
+                    elif len(t_str) >= 19:
+                        return datetime.strptime(t_str[:19], '%Y-%m-%d %H:%M:%S')
+                    return None
+                except:
+                    return None
+            matched_rem_ids = set()
+            pairs = []
+            for loc_item in loc_filtered:
+                loc_type = str(loc_item.get('desc', ''))[:2].upper()
+                loc_amt = abs(float(loc_item.get('amount', 0)))
+                loc_desc = str(loc_item.get('desc', ''))
+                loc_sync_id = extract_sync_id(loc_desc)
+                target_rem_type = ''
+                if loc_type == 'BS':
+                    target_rem_type = 'BA'
+                elif loc_type == 'BA':
+                    target_rem_type = 'BS'
+                elif loc_type == 'RC':
+                    target_rem_type = 'RF'
+                elif loc_type == 'RF':
+                    target_rem_type = 'RC'
+                found_match = None
+                if loc_sync_id:
+                    for rem_item in rem_filtered:
+                        if rem_item.get('id') in matched_rem_ids:
+                            continue
+                        rem_sync_id = extract_sync_id(str(rem_item.get('desc', '')))
+                        if rem_sync_id == loc_sync_id:
+                            found_match = rem_item
+                            break
+                if not found_match:
+                    loc_dt = parse_time_safe(loc_item.get('time', ''))
+                    for rem_item in rem_filtered:
+                        if rem_item.get('id') in matched_rem_ids:
+                            continue
+                        rem_type = str(rem_item.get('desc', ''))[:2].upper()
+                        rem_amt = abs(float(rem_item.get('amount', 0)))
+                        if rem_type == target_rem_type:
+                            rem_dt = parse_time_safe(rem_item.get('time', ''))
+                            time_matched = False
+                            if loc_dt and rem_dt:
+                                diff_seconds = abs((loc_dt - rem_dt).total_seconds())
+                                if diff_seconds <= 60.0:
+                                    time_matched = True
+                            if time_matched or (abs(rem_amt - loc_amt) < 0.5 and loc_amt > 0):
+                                found_match = rem_item
+                                break
+                if found_match:
+                    matched_rem_ids.add(found_match.get('id'))
+                    pairs.append((loc_item, found_match))
+                else:
+                    pairs.append((loc_item, None))
+            for rem_item in rem_filtered:
+                if rem_item.get('id') not in matched_rem_ids:
+                    pairs.append((None, rem_item))
+
+            def get_sort_time(pair):
+                item = pair[0] if pair[0] else pair[1]
+                return str(item.get('time', ''))
+            pairs.sort(key=get_sort_time, reverse=True)
+            Clock.schedule_once(lambda dt: render_ui(pairs), 0)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def fetch_split_item_details(self, item_data, is_local, remote_base_url, remote_pin):
+        from kivy.network.urlrequest import UrlRequest
+        import json
+        self.notify('Chargement des détails du document...', 'info')
+        is_tr_str = 'true' if item_data.get('is_transfer') else 'false'
+        item_id = item_data['id']
+        if is_local:
+            url = f'{self.api_base}/api/get_transaction_details?id={item_id}&is_transfer={is_tr_str}'
+            headers = {'Content-type': 'application/json'}
+            local_pin = self.store.get('config').get('server_pin', '') if self.store.exists('config') else ''
+            if local_pin:
+                headers['X-Server-PIN'] = str(local_pin)
+        else:
+            url = f'{remote_base_url}/api/get_transaction_details?id={item_id}&is_transfer={is_tr_str}'
+            headers = {'Content-type': 'application/json'}
+            if remote_pin:
+                headers['X-Server-PIN'] = str(remote_pin)
+
+        def on_success(req, res):
+            if res.get('purchase_location'):
+                item_data['purchase_location'] = res.get('purchase_location')
+            if res.get('location'):
+                item_data['location'] = res.get('location')
+            if res.get('source_location'):
+                item_data['source_location'] = res.get('source_location')
+            self.show_server_transaction_details(item_data, res)
+
+        def on_fail(req, err):
+            self.notify('Erreur de connexion serveur pour les détails', 'error')
+        UrlRequest(url, req_headers=headers, on_success=on_success, on_failure=on_fail, on_error=on_fail)
 
     def _fetch_remote_products_for_transfer(self, mode_transfert):
         import threading
@@ -2049,13 +2453,20 @@ class StockApp(MDApp):
                 self.rv_products.data = new_data
                 self.rv_products.scroll_y = 1.0
                 self.current_page_offset = len(new_data)
+                self.rv_products.refresh_from_data()
+                self.rv_products.loading_lock = False
+                self.is_loading_more = False
             else:
-                self.rv_products.data.extend(new_data)
+                self.rv_products.data = self.rv_products.data + new_data
                 self.current_page_offset += len(new_data)
-            self.rv_products.refresh_from_data()
-        if self.rv_products:
-            self.rv_products.loading_lock = False
-        self.is_loading_more = False
+                self.rv_products.refresh_from_data()
+
+                def unlock_scrolling(dt):
+                    if self.rv_products:
+                        self.rv_products.loading_lock = False
+                    self.is_loading_more = False
+                from kivy.clock import Clock
+                Clock.schedule_once(unlock_scrolling, 0.4)
 
     def filter_products(self, instance, text):
         query = instance.get_value() if hasattr(instance, 'get_value') else text
@@ -2695,6 +3106,40 @@ class StockApp(MDApp):
                 continue
         return (round(total_ht, 2), round(total_tva, 2))
 
+    def deep_clean_old_caches(self):
+        import os
+        import time
+        try:
+            current_time = time.time()
+            JSON_EXPIRY_SECONDS = 259200
+            json_threshold_time = current_time - JSON_EXPIRY_SECONDS
+            IMG_EXPIRY_SECONDS = 2592000
+            img_threshold_time = current_time - IMG_EXPIRY_SECONDS
+            cache_files = ['stock_cache.json', 'remote_stores_cache.json', 'local_stats.json']
+            for filename in cache_files:
+                filepath = os.path.join(self.data_dir, filename)
+                if os.path.exists(filepath):
+                    file_mod_time = os.path.getmtime(filepath)
+                    if file_mod_time < json_threshold_time:
+                        try:
+                            os.remove(filepath)
+                            print(f'[CLEANUP] Deleted old cache data (>3 days): {filename}')
+                        except:
+                            pass
+            img_cache_dir = os.path.join(self.data_dir, 'img_cache')
+            if os.path.exists(img_cache_dir):
+                for img_file in os.listdir(img_cache_dir):
+                    img_path = os.path.join(img_cache_dir, img_file)
+                    if os.path.isfile(img_path):
+                        img_mod_time = os.path.getmtime(img_path)
+                        if img_mod_time < img_threshold_time:
+                            try:
+                                os.remove(img_path)
+                            except:
+                                pass
+        except Exception as e:
+            print(f'[CLEANUP ERROR] Failed to clean old caches: {e}')
+
     def build(self):
         Builder.load_string(KV_BUILDER)
         self.title = 'MagPro'
@@ -2713,6 +3158,7 @@ class StockApp(MDApp):
         self.theme_cls.font_styles['Button'] = ['ArabicFont', 14, True, 1.25]
         self.theme_cls.font_styles['Caption'] = ['ArabicFont', 12, False, 0.4]
         self.data_dir = self.user_data_dir
+        self.deep_clean_old_caches()
 
         def load_safe_store(filename):
             path = os.path.join(self.data_dir, filename)
@@ -2755,8 +3201,6 @@ class StockApp(MDApp):
         self.status_bar_label = MDLabel(text='Initialisation...', halign='center', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_style='Caption', bold=True)
         self.status_bar_bg.add_widget(self.status_bar_label)
         self.root_box.add_widget(self.status_bar_bg)
-        self._heartbeat_event = Clock.schedule_interval(self.check_server_heartbeat, 5)
-        self.maps_enabled = False
         self.init_servers_config()
         self.apply_active_server()
         self._heartbeat_event = Clock.schedule_interval(self.check_server_heartbeat, 5)
@@ -3181,15 +3625,6 @@ class StockApp(MDApp):
         except Exception as e:
             print(f'Error applying server stats: {e}')
 
-    def open_history_date_picker(self, instance):
-        date_dialog = MDDatePicker()
-        date_dialog.bind(on_save=self.on_history_date_save)
-        date_dialog.open()
-
-    def on_history_date_save(self, instance, value, date_range):
-        self.btn_hist_date.text = str(value)
-        self.filter_history_list(specific_date=value)
-
     def calculate_net_total(self):
         self.fetch_dashboard_stats()
 
@@ -3230,26 +3665,51 @@ class StockApp(MDApp):
             except Exception as e:
                 pass
 
-    def filter_entity_history_list(self, day_offset=None, specific_date=None):
+    def filter_entity_history_list(self, filter_type=None, specific_date=None, specific_end_date=None):
         if not hasattr(self, 'rv_entity_history'):
             return
+        from datetime import datetime, timedelta
+        from kivy.clock import Clock
         inactive_color = (0.5, 0.5, 0.5, 1)
         active_color = self.theme_cls.primary_color
-        target_date = None
-        if specific_date:
-            target_date = specific_date
-            self.btn_ent_hist_today.md_bg_color = inactive_color
-            self.btn_ent_hist_yesterday.md_bg_color = inactive_color
+        buttons = [self.btn_ent_hist_today, self.btn_ent_hist_yesterday, self.btn_ent_hist_week, self.btn_ent_hist_month, self.btn_ent_hist_date]
+        for btn in buttons:
+            btn.md_bg_color = inactive_color
+        today = datetime.now().date()
+        start_date = today
+        end_date = today
+        if filter_type == 'custom' and specific_date:
+            start_date = specific_date
+            end_date = specific_end_date or specific_date
             self.btn_ent_hist_date.md_bg_color = active_color
+            if start_date == end_date:
+                self.btn_ent_hist_date.text = start_date.strftime('%d/%m')
+            else:
+                self.btn_ent_hist_date.text = 'CAL'
         else:
-            if day_offset is None:
-                day_offset = 0
-            target_date = datetime.now().date() - timedelta(days=day_offset)
-            self.btn_ent_hist_today.md_bg_color = active_color if day_offset == 0 else inactive_color
-            self.btn_ent_hist_yesterday.md_bg_color = active_color if day_offset == 1 else inactive_color
-            self.btn_ent_hist_date.md_bg_color = inactive_color
-            self.btn_ent_hist_date.text = 'CALENDRIER'
+            self.btn_ent_hist_date.text = 'CAL'
+            if filter_type == 'auj' or filter_type is None:
+                start_date = today
+                end_date = today
+                self.btn_ent_hist_today.md_bg_color = active_color
+            elif filter_type == 'hier':
+                start_date = today - timedelta(days=1)
+                end_date = start_date
+                self.btn_ent_hist_yesterday.md_bg_color = active_color
+            elif filter_type == 'semaine':
+                start_date = today - timedelta(days=7)
+                end_date = today
+                self.btn_ent_hist_week.md_bg_color = active_color
+            elif filter_type == 'mois':
+                start_date = today - timedelta(days=30)
+                end_date = today
+                self.btn_ent_hist_month.md_bg_color = active_color
         self.rv_entity_history.data = [{'type_str': 'Chargement...', 'ref_str': '', 'entity_str': 'Veuillez patienter', 'date_str': '', 'amount_text': '', 'icon': 'timer-sand', 'icon_color': [0.5, 0.5, 0.5, 1], 'bg_color': [1, 1, 1, 1], 'is_local': False, 'raw_data': None}]
+        self.rv_entity_history.refresh_from_data()
+        Clock.schedule_once(lambda dt: self._process_entity_history_data(start_date, end_date), 0.05)
+
+    def _process_entity_history_data(self, start_date, end_date):
+        from kivy.network.urlrequest import UrlRequest
 
         def on_history_fetched(req, result):
             rv_data = []
@@ -3329,14 +3789,14 @@ class StockApp(MDApp):
                 final_user_time = f"{time_str} • {item.get('user', '')}"
                 rv_data.append({'type_str': 'Opération', 'ref_str': final_user_time, 'entity_str': final_desc, 'date_str': '', 'amount_text': amount_text, 'icon': icon, 'icon_color': color, 'bg_color': bg_color, 'is_local': False, 'raw_data': item, 'key': ''})
             if not rv_data:
-                rv_data.append({'type_str': 'Info', 'ref_str': '', 'entity_str': 'Aucune transaction trouvée (Filtre).', 'date_str': '', 'amount_text': '', 'icon': 'filter-outline', 'icon_color': [0.5, 0.5, 0.5, 1], 'bg_color': [1, 1, 1, 1], 'is_local': False, 'raw_data': None})
+                rv_data.append({'type_str': 'Info', 'ref_str': '', 'entity_str': 'Aucune transaction trouvée.', 'date_str': '', 'amount_text': '', 'icon': 'filter-outline', 'icon_color': [0.5, 0.5, 0.5, 1], 'bg_color': [1, 1, 1, 1], 'is_local': False, 'raw_data': None})
             self.rv_entity_history.data = rv_data
             self.rv_entity_history.refresh_from_data()
 
         def on_fail(req, err):
             self.rv_entity_history.data = [{'type_str': 'Erreur', 'ref_str': '', 'entity_str': 'Erreur de connexion serveur.', 'date_str': '', 'amount_text': '', 'icon': 'wifi-off', 'icon_color': [0.8, 0, 0, 1], 'bg_color': [1, 1, 1, 1], 'is_local': False, 'raw_data': None}]
         if self.is_server_reachable:
-            url = f'{self.api_base}/api/history?date={target_date}'
+            url = f'{self.api_base}/api/history?date={end_date}&start_date={start_date}&end_date={end_date}'
             UrlRequest(url, on_success=on_history_fetched, on_failure=on_fail, on_error=on_fail)
         else:
             self.rv_entity_history.data = [{'type_str': 'Hors Ligne', 'ref_str': '', 'entity_str': "Impossible de voir l'historique", 'date_str': '', 'amount_text': '', 'icon': 'wifi-off', 'icon_color': [0.5, 0.5, 0.5, 1], 'bg_color': [1, 1, 1, 1], 'is_local': False, 'raw_data': None}]
@@ -3393,13 +3853,21 @@ class StockApp(MDApp):
 
     def open_entity_history_dialog(self, entity):
         self.history_target_entity = entity
-        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(550))
-        tabs_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=5)
-        self.btn_ent_hist_today = MDRaisedButton(text='AUJ.', size_hint_x=0.33, elevation=0, on_release=lambda x: self.filter_entity_history_list(day_offset=0))
-        self.btn_ent_hist_yesterday = MDRaisedButton(text='HIER', size_hint_x=0.33, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_entity_history_list(day_offset=1))
-        self.btn_ent_hist_date = MDRaisedButton(text='CALENDRIER', size_hint_x=0.33, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self.open_entity_history_date_picker)
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivy.metrics import dp
+        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(550), spacing=dp(10))
+        tabs_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(38), spacing=dp(2))
+        self.btn_ent_hist_today = MDRaisedButton(text='AUJ', size_hint_x=1, font_size='11sp', elevation=0, on_release=lambda x: self.filter_entity_history_list(filter_type='auj'))
+        self.btn_ent_hist_yesterday = MDRaisedButton(text='HIE', size_hint_x=1, font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_entity_history_list(filter_type='hier'))
+        self.btn_ent_hist_week = MDRaisedButton(text='SEM', size_hint_x=1, font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_entity_history_list(filter_type='semaine'))
+        self.btn_ent_hist_month = MDRaisedButton(text='MOI', size_hint_x=1, font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_entity_history_list(filter_type='mois'))
+        self.btn_ent_hist_date = MDRaisedButton(text='CAL', size_hint_x=1, font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self.open_entity_history_date_picker)
         tabs_box.add_widget(self.btn_ent_hist_today)
         tabs_box.add_widget(self.btn_ent_hist_yesterday)
+        tabs_box.add_widget(self.btn_ent_hist_week)
+        tabs_box.add_widget(self.btn_ent_hist_month)
         tabs_box.add_widget(self.btn_ent_hist_date)
         content.add_widget(tabs_box)
         self.rv_entity_history = HistoryRecycleView()
@@ -3407,7 +3875,7 @@ class StockApp(MDApp):
         title_text = self.fix_text(f"Historique: {entity['name']}")
         self.entity_hist_dialog = MDDialog(title=title_text, type='custom', content_cls=content, size_hint=(0.95, 0.9))
         self.entity_hist_dialog.open()
-        self.filter_entity_history_list(day_offset=0)
+        self.filter_entity_history_list(filter_type='auj')
 
     def submit_simple_payment(self, x):
         current_time = time.time()
@@ -3678,39 +4146,37 @@ class StockApp(MDApp):
             self.buttons_container.add_widget(grid_expenses)
             self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', c_ca[0], c_ca[1], self.open_catalogue_browser))
         if has_multiple_stores:
-            multi_store_container = MDCard(orientation='vertical', padding=[dp(15), dp(15), dp(15), dp(20)], spacing=dp(15), radius=[15], md_bg_color=(1, 1, 1, 1), elevation=2, line_color=(0.9, 0.9, 0.9, 1), line_width=1, size_hint_y=None, adaptive_height=True)
-            header_multi = MDBoxLayout(orientation='horizontal', adaptive_size=True, spacing=dp(10), pos_hint={'center_x': 0.5})
-            icon_widget = MDIcon(icon='server-network', theme_text_color='Custom', text_color=(0.1, 0.5, 0.8, 1), font_size='24sp', pos_hint={'center_y': 0.5})
-            lbl_widget = MDLabel(text='PANNEAU MULTI-MAGASINS', font_style='Subtitle2', bold=True, theme_text_color='Primary', adaptive_size=True, pos_hint={'center_y': 0.5})
-            header_multi.add_widget(icon_widget)
-            header_multi.add_widget(lbl_widget)
+            multi_store_container = MDCard(orientation='vertical', padding=[dp(15), dp(15), dp(15), dp(15)], spacing=dp(15), radius=[16], md_bg_color=(1, 1, 1, 1), elevation=1, size_hint_y=None, adaptive_height=True)
+            header_multi = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40))
+            title_box = MDBoxLayout(orientation='horizontal', adaptive_width=True, spacing=dp(8), pos_hint={'center_y': 0.5})
+            icon_multi = MDIcon(icon='server-network', theme_text_color='Custom', text_color=(0.1, 0.5, 0.8, 1), font_size='24sp', pos_hint={'center_y': 0.5}, size_hint_x=None, width=dp(28))
+            title_box.add_widget(icon_multi)
+            label_multi = MDLabel(text='MULTI-MAGASINS', font_name='RobotoBold', font_size='14sp', theme_text_color='Primary', adaptive_width=True, pos_hint={'center_y': 0.5})
+            title_box.add_widget(label_multi)
+            header_multi.add_widget(title_box)
+            header_multi.add_widget(MDBoxLayout(size_hint_x=1))
+            from kivymd.uix.button import MDFillRoundFlatIconButton
+            btn_historique = MDFillRoundFlatIconButton(text='HISTORIQUE', icon='history', md_bg_color=(0.94, 0.92, 0.98, 1), theme_text_color='Custom', text_color=(0.4, 0.1, 0.6, 1), icon_color=(0.4, 0.1, 0.6, 1), font_size='11sp', font_name='RobotoBold', pos_hint={'center_y': 0.5}, size_hint_y=None, height=dp(32), on_release=lambda x: self.open_remote_transfer_selector('remote_history'))
+            header_multi.add_widget(btn_historique)
             multi_store_container.add_widget(header_multi)
             multi_store_container.add_widget(MDSeparator(height=dp(1), color=(0.93, 0.93, 0.93, 1)))
 
-            def create_modern_btn(icon, text, icon_color, action):
-                card = MDCard(orientation='vertical', padding=[dp(5), dp(12), dp(5), dp(10)], radius=[10], ripple_behavior=True, on_release=action, md_bg_color=(0.96, 0.97, 0.98, 1), elevation=0, size_hint_y=None, height=dp(85))
-                card.add_widget(MDIcon(icon=icon, font_size='32sp', pos_hint={'center_x': 0.5}, theme_text_color='Custom', text_color=icon_color))
-                card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
-                lbl = MDLabel(text=text, halign='center', valign='center', bold=True, font_style='Caption', theme_text_color='Custom', text_color=(0.2, 0.2, 0.2, 1))
-                lbl.bind(size=lbl.setter('text_size'))
+            def create_modern_action(icon, text, color_icon, color_bg, action):
+                card = MDCard(orientation='vertical', padding=[0, dp(12), 0, dp(8)], spacing=dp(5), radius=[12], ripple_behavior=True, on_release=action, md_bg_color=color_bg, elevation=0, size_hint_y=None, height=dp(80))
+                card.add_widget(MDIcon(icon=icon, font_size='28sp', pos_hint={'center_x': 0.5}, theme_text_color='Custom', text_color=color_icon))
+                lbl = MDLabel(text=text, halign='center', font_name='RobotoBold', font_style='Caption', theme_text_color='Custom', text_color=(0.2, 0.2, 0.2, 1))
                 card.add_widget(lbl)
                 return card
             row_transferts = MDBoxLayout(orientation='horizontal', spacing=dp(10), adaptive_height=True)
-            btn_env = create_modern_btn('package-up', 'ENVOYER', (0.1, 0.5, 0.8, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_out'))
-            btn_rec = create_modern_btn('package-down', 'RECEVOIR', (0.0, 0.6, 0.3, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_in'))
-            btn_ech = create_modern_btn('sync-circle', 'ÉCHANGE', (0.9, 0.5, 0.0, 1), lambda x: self.open_remote_transfer_selector('remote_exchange'))
-            row_transferts.add_widget(btn_env)
-            row_transferts.add_widget(btn_rec)
-            row_transferts.add_widget(btn_ech)
+            row_transferts.add_widget(create_modern_action('package-up', 'ENVOYER', (0.1, 0.5, 0.8, 1), (0.92, 0.96, 1, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_out')))
+            row_transferts.add_widget(create_modern_action('package-down', 'RECEVOIR', (0.0, 0.6, 0.3, 1), (0.92, 1, 0.94, 1), lambda x: self.open_remote_transfer_selector('remote_transfer_in')))
+            row_transferts.add_widget(create_modern_action('sync-circle', 'ÉCHANGE', (0.9, 0.5, 0.0, 1), (1, 0.96, 0.88, 1), lambda x: self.open_remote_transfer_selector('remote_exchange')))
             multi_store_container.add_widget(row_transferts)
             row_retours = MDBoxLayout(orientation='horizontal', spacing=dp(10), adaptive_height=True)
-            btn_ret_cl = create_modern_btn('keyboard-return', 'RETOUR CL.', (0.8, 0.1, 0.1, 1), lambda x: self.open_remote_transfer_selector('remote_return_client'))
-            btn_ret_fr = create_modern_btn('undo', 'RETOUR FR.', (0.5, 0.1, 0.6, 1), lambda x: self.open_remote_transfer_selector('remote_return_supplier'))
-            row_retours.add_widget(btn_ret_cl)
-            row_retours.add_widget(btn_ret_fr)
+            row_retours.add_widget(create_modern_action('arrow-u-left-top', 'RET. CLIENT', (0.8, 0.1, 0.1, 1), (1, 0.92, 0.92, 1), lambda x: self.open_remote_transfer_selector('remote_return_client')))
+            row_retours.add_widget(create_modern_action('arrow-u-right-top', 'RET. FOURN.', (0.6, 0.2, 0.7, 1), (0.96, 0.92, 1, 1), lambda x: self.open_remote_transfer_selector('remote_return_supplier')))
             multi_store_container.add_widget(row_retours)
-            from kivymd.uix.button import MDFillRoundFlatIconButton
-            btn_sync_articles = MDFillRoundFlatIconButton(text='SYNCHRONISER LES ARTICLES', icon='cloud-sync', md_bg_color=(0.15, 0.18, 0.22, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), font_size='15sp', size_hint_x=0.85, pos_hint={'center_x': 0.5}, size_hint_y=None, height=dp(48), on_release=self.open_sync_articles_dialog)
+            btn_sync_articles = MDFillRoundFlatIconButton(text='SYNCHRONISER LES ARTICLES', icon='cloud-sync', md_bg_color=(0.12, 0.15, 0.2, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), font_size='14sp', font_name='RobotoBold', pos_hint={'center_x': 0.5}, size_hint_x=0.9, size_hint_y=None, height=dp(48), on_release=self.open_sync_articles_dialog)
             multi_store_container.add_widget(btn_sync_articles)
             self.buttons_container.add_widget(multi_store_container)
         self.stats_card_container.clear_widgets()
@@ -4143,13 +4609,18 @@ class StockApp(MDApp):
                 pass
 
     def open_entity_history_date_picker(self, instance):
-        date_dialog = MDDatePicker()
+        from kivymd.uix.pickers import MDDatePicker
+        date_dialog = MDDatePicker(mode='range')
         date_dialog.bind(on_save=self.on_entity_history_date_save)
         date_dialog.open()
 
     def on_entity_history_date_save(self, instance, value, date_range):
-        self.btn_ent_hist_date.text = str(value)
-        self.filter_entity_history_list(specific_date=value)
+        if date_range and len(date_range) > 0:
+            start_date = date_range[0]
+            end_date = date_range[-1]
+            self.filter_entity_history_list(filter_type='custom', specific_date=start_date, specific_end_date=end_date)
+        else:
+            self.filter_entity_history_list(filter_type='custom', specific_date=value, specific_end_date=value)
 
     def open_entity_manager(self, entity_type):
         self.current_entity_type_mgmt = entity_type
@@ -5004,7 +5475,7 @@ class StockApp(MDApp):
         card_login.add_widget(self.password_field)
         card_login.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='18sp', size_hint_x=1, on_release=self.do_login))
         layout.add_widget(card_login)
-        footer_label = MDLabel(text='MagPro v7.7.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.02}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
+        footer_label = MDLabel(text='MagPro v7.8.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.02}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
         layout.add_widget(footer_label)
         screen.add_widget(layout)
         return screen
@@ -5364,7 +5835,7 @@ class StockApp(MDApp):
         from kivymd.uix.card import MDSeparator
         header_container.add_widget(MDSeparator(height=dp(1), color=(0.9, 0.9, 0.9, 1)))
         root_layout.add_widget(header_container)
-        self.cart_bar = MDCard(size_hint_y=None, height=dp(60), padding=[dp(15), dp(5)], md_bg_color=self.theme_cls.primary_color, radius=[15, 15, 0, 0], ripple_behavior=True, on_release=self.open_cart_screen, elevation=4, pos_hint={'bottom': 1})
+        self.cart_bar = MDCard(size_hint_y=None, height=dp(60), padding=[dp(15), dp(5)], md_bg_color=self.theme_cls.primary_color, radius=[15, 15, 0, 0], ripple_behavior=True, on_release=self.open_cart_screen, elevation=4, pos_hint={'y': 0})
         cart_box = MDBoxLayout(orientation='horizontal')
         self.lbl_cart_count = MDLabel(text='PANIER (0)', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='left', size_hint_x=0.5, font_style='Subtitle1')
         self.lbl_cart_total = MDLabel(text='0.00 DA', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='right', font_style='H6', size_hint_x=0.5)
@@ -6376,7 +6847,7 @@ class StockApp(MDApp):
             if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod in self.prod_search_layout.children:
                 self.prod_search_layout.remove_widget(self.btn_scan_prod)
             if self.cart_bar:
-                self.cart_bar.height = 0
+                self.cart_bar.pos_hint = {'top': 0}
                 self.cart_bar.opacity = 0
                 self.cart_bar.disabled = True
         else:
@@ -6385,7 +6856,7 @@ class StockApp(MDApp):
             if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
                 self.prod_search_layout.add_widget(self.btn_scan_prod)
             if self.cart_bar:
-                self.cart_bar.height = dp(60)
+                self.cart_bar.pos_hint = {'y': 0}
                 self.cart_bar.opacity = 1
                 self.cart_bar.disabled = False
         self.current_product_list_source = self.all_products_raw
@@ -7754,28 +8225,37 @@ class StockApp(MDApp):
         self.go_back()
 
     def show_pending_dialog(self):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.button import MDFlatButton, MDRaisedButton
+        from kivymd.uix.scrollview import MDScrollView
+        from kivy.metrics import dp
         self.current_history_filter = 'ALL'
-        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(550))
-        tabs_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(50), spacing=dp(5))
-        if self.is_seller_mode:
-            btn_width = 0.33
-        else:
-            btn_width = 0.24
-        self.btn_hist_today = MDRaisedButton(text='AUJ.', size_hint_x=btn_width, elevation=0, on_release=lambda x: self.filter_history_list(day_offset=0))
-        self.btn_hist_yesterday = MDRaisedButton(text='HIER.', size_hint_x=btn_width, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_history_list(day_offset=1))
-        self.btn_hist_date = MDRaisedButton(text='CALEND.', size_hint_x=btn_width, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self.open_history_date_picker)
-        tabs_box.add_widget(self.btn_hist_today)
-        tabs_box.add_widget(self.btn_hist_yesterday)
-        tabs_box.add_widget(self.btn_hist_date)
+        content = MDBoxLayout(orientation='vertical', size_hint_y=None, height=dp(580))
+        filter_container = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(5), padding=[0, 0, 0, dp(10)])
+        row_dates = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(38), spacing=dp(2))
+        self.btn_hist_today = MDRaisedButton(text='AUJ', elevation=0, size_hint_x=1, font_size='11sp', on_release=lambda x: self.filter_history_list(filter_type='auj'))
+        self.btn_hist_yesterday = MDRaisedButton(text='HIE', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_history_list(filter_type='hier'))
+        self.btn_hist_week = MDRaisedButton(text='SEM', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_history_list(filter_type='semaine'))
+        self.btn_hist_month = MDRaisedButton(text='MOI', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_history_list(filter_type='mois'))
+        self.btn_hist_date = MDRaisedButton(text='CAL', elevation=0, size_hint_x=1, font_size='11sp', md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self.open_history_date_picker)
+        row_dates.add_widget(self.btn_hist_today)
+        row_dates.add_widget(self.btn_hist_yesterday)
+        row_dates.add_widget(self.btn_hist_week)
+        row_dates.add_widget(self.btn_hist_month)
+        row_dates.add_widget(self.btn_hist_date)
+        filter_container.add_widget(row_dates)
         if not self.is_seller_mode:
-            self.btn_hist_filter = MDRaisedButton(text='FILT.', size_hint_x=btn_width, elevation=0, md_bg_color=(0.2, 0.2, 0.2, 1), text_color=(1, 1, 1, 1), on_release=self.open_history_filter_menu)
-            tabs_box.add_widget(self.btn_hist_filter)
-        content.add_widget(tabs_box)
+            row_filter = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40))
+            self.btn_hist_filter = MDRaisedButton(text="FILTRER PAR TYPE D'OPÉRATION", size_hint_x=1, elevation=0, md_bg_color=(0.2, 0.2, 0.2, 1), text_color=(1, 1, 1, 1), on_release=self.open_history_filter_menu)
+            row_filter.add_widget(self.btn_hist_filter)
+            filter_container.add_widget(row_filter)
+        content.add_widget(filter_container)
         self.rv_history = HistoryRecycleView()
         content.add_widget(self.rv_history)
         self.pending_dialog = MDDialog(title='Historique', type='custom', content_cls=content, size_hint=(0.98, 0.98))
         self.pending_dialog.open()
-        self.filter_history_list(day_offset=0)
+        self.filter_history_list(filter_type='auj')
 
     def open_history_filter_menu(self, instance):
         from kivymd.uix.dialog import MDDialog
@@ -7796,45 +8276,87 @@ class StockApp(MDApp):
         self.hist_filter_dialog = MDDialog(title='Filtrer par type', type='custom', content_cls=content, size_hint=(0.85, None), buttons=[MDFlatButton(text='ANNULER', theme_text_color='Custom', text_color=self.theme_cls.primary_color, on_release=lambda x: self.hist_filter_dialog.dismiss())])
         self.hist_filter_dialog.open()
 
+    def open_history_date_picker(self, instance):
+        from kivymd.uix.pickers import MDDatePicker
+        date_dialog = MDDatePicker(mode='range')
+        date_dialog.bind(on_save=self.on_history_date_save)
+        date_dialog.open()
+
+    def on_history_date_save(self, instance, value, date_range):
+        if date_range and len(date_range) > 0:
+            start_date = date_range[0]
+            end_date = date_range[-1]
+            self.filter_history_list(filter_type='custom', specific_date=start_date, specific_end_date=end_date)
+        else:
+            self.filter_history_list(filter_type='custom', specific_date=value, specific_end_date=value)
+
     def set_history_filter(self, filter_type):
+        from kivy.clock import Clock
         self.current_history_filter = filter_type
         if hasattr(self, 'hist_filter_dialog') and self.hist_filter_dialog:
             self.hist_filter_dialog.dismiss()
         if hasattr(self, 'btn_hist_filter'):
             if filter_type == 'ALL':
                 self.btn_hist_filter.md_bg_color = (0.2, 0.2, 0.2, 1)
-                self.btn_hist_filter.text = 'FILTRER'
+                self.btn_hist_filter.text = "FILTRER PAR TYPE D'OPÉRATION"
             else:
                 self.btn_hist_filter.md_bg_color = (0, 0.6, 0.8, 1)
-                self.btn_hist_filter.text = f'FILTRE: {filter_type}'
+                self.btn_hist_filter.text = f'FILTRE ACTIF: {filter_type}'
         self.notify(f'Filtre actif: {filter_type}', 'info')
-        target_date = getattr(self, 'history_view_date', datetime.now().date())
-        self.filter_history_list(specific_date=target_date)
+        start_date = getattr(self, 'history_view_start', datetime.now().date())
+        end_date = getattr(self, 'history_view_end', datetime.now().date())
+        Clock.schedule_once(lambda dt: self._process_history_data(start_date, end_date), 0.05)
 
-    def filter_history_list(self, day_offset=None, specific_date=None):
+    def filter_history_list(self, filter_type=None, specific_date=None, specific_end_date=None):
+        from datetime import datetime, timedelta
+        from kivy.clock import Clock
         if not hasattr(self, 'btn_hist_today') or not self.btn_hist_today:
             if specific_date:
-                self.history_view_date = specific_date
+                self.history_view_start = specific_date
+                self.history_view_end = specific_end_date or specific_date
             return
         if not hasattr(self, 'current_history_filter'):
             self.current_history_filter = 'ALL'
         inactive_color = (0.5, 0.5, 0.5, 1)
         active_color = self.theme_cls.primary_color
-        target_date = None
-        if specific_date:
-            target_date = specific_date
-            self.btn_hist_today.md_bg_color = inactive_color
-            self.btn_hist_yesterday.md_bg_color = inactive_color
+        buttons = [self.btn_hist_today, self.btn_hist_yesterday, self.btn_hist_week, self.btn_hist_month, self.btn_hist_date]
+        for btn in buttons:
+            btn.md_bg_color = inactive_color
+        today = datetime.now().date()
+        start_date = today
+        end_date = today
+        if filter_type == 'custom' and specific_date:
+            start_date = specific_date
+            end_date = specific_end_date or specific_date
             self.btn_hist_date.md_bg_color = active_color
+            if start_date == end_date:
+                self.btn_hist_date.text = start_date.strftime('%d/%m')
+            else:
+                self.btn_hist_date.text = 'CAL'
         else:
-            if day_offset is None:
-                day_offset = 0
-            target_date = datetime.now().date() - timedelta(days=day_offset)
-            self.btn_hist_today.md_bg_color = active_color if day_offset == 0 else inactive_color
-            self.btn_hist_yesterday.md_bg_color = active_color if day_offset == 1 else inactive_color
-            self.btn_hist_date.md_bg_color = inactive_color
-            self.btn_hist_date.text = 'CALEND.'
-        self.history_view_date = target_date
+            self.btn_hist_date.text = 'CAL'
+            if filter_type == 'auj' or filter_type is None:
+                start_date = today
+                end_date = today
+                self.btn_hist_today.md_bg_color = active_color
+            elif filter_type == 'hier':
+                start_date = today - timedelta(days=1)
+                end_date = start_date
+                self.btn_hist_yesterday.md_bg_color = active_color
+            elif filter_type == 'semaine':
+                start_date = today - timedelta(days=7)
+                end_date = today
+                self.btn_hist_week.md_bg_color = active_color
+            elif filter_type == 'mois':
+                start_date = today - timedelta(days=30)
+                end_date = today
+                self.btn_hist_month.md_bg_color = active_color
+        self.history_view_start = start_date
+        self.history_view_end = end_date
+        Clock.schedule_once(lambda dt: self._process_history_data(start_date, end_date), 0.05)
+
+    def _process_history_data(self, start_date, end_date):
+        from datetime import datetime
         self.history_rv_data = []
         keys = list(self.offline_store.keys())
         local_items = []
@@ -7856,7 +8378,7 @@ class StockApp(MDApp):
                 if parts[0].isdigit():
                     ts_val = int(parts[0])
                     item_date = datetime.fromtimestamp(ts_val).date()
-                    if item_date == target_date:
+                    if start_date <= item_date <= end_date:
                         local_items.append((ts_val, k, item_store))
             except:
                 continue
@@ -7866,6 +8388,7 @@ class StockApp(MDApp):
             doc_type = data.get('doc_type', 'BV')
             is_simple_payment = data.get('is_simple_payment', False)
             dt_str = datetime.fromtimestamp(ts_val).strftime('%H:%M')
+            desc = str(data.get('desc', data.get('custom_label', data.get('note', ''))))
             entity_name = 'Inconnu'
             ent_id = data.get('entity_id')
             if doc_type == 'TR':
@@ -7968,11 +8491,23 @@ class StockApp(MDApp):
                 icon_name = 'file-document-edit'
                 full_doc_name = 'Facture Achat'
                 icon_color = (1, 0.4, 0, 1)
-            ref_str = f'Local • {self.current_user_name}'
+            elif doc_type == 'FP':
+                icon_name = 'file-document-outline'
+                icon_color = (0.5, 0, 0.5, 1)
+                full_doc_name = 'Proforma'
+            elif doc_type == 'BI':
+                icon_name = 'database-plus'
+                full_doc_name = 'Bon Initial'
+            clean_desc = desc.replace('Versement (Excédent)', 'Versement').replace('Règlement (Excédent)', 'Règlement')
+            if clean_desc and clean_desc not in ['Versement', 'Règlement', 'Crédit', 'Dette']:
+                ref_str = f'Local • {clean_desc} • {self.current_user_name}'
+            else:
+                ref_str = f'Local • {self.current_user_name}'
             self.history_rv_data.append({'type_str': full_doc_name, 'ref_str': ref_str, 'entity_str': entity_name, 'date_str': dt_str, 'amount_text': amount_text, 'icon': icon_name, 'icon_color': icon_color, 'bg_color': bg_col, 'is_local': True, 'key': k, 'raw_data': None})
         self.rv_history.data = self.history_rv_data
         if self.is_server_reachable:
-            url = f'{self.api_base}/api/history?date={target_date}'
+            from kivy.network.urlrequest import UrlRequest
+            url = f'{self.api_base}/api/history?start_date={start_date}&end_date={end_date}'
             UrlRequest(url, on_success=self.on_history_server_loaded, on_failure=self.on_history_fail)
         else:
             if not self.history_rv_data:
