@@ -517,9 +517,15 @@ class ProductRecycleView(RecycleView):
     def __init__(self, **kwargs):
         super(ProductRecycleView, self).__init__(**kwargs)
         self.data = []
+        from kivy.clock import Clock
+
+        def apply_friction(dt):
+            if hasattr(self, 'effect_y'):
+                self.effect_y.friction = 0.12
+        Clock.schedule_once(apply_friction, 0)
 
     def on_scroll_y(self, instance, value):
-        if value <= 0.02 and (not self.loading_lock) and (not MDApp.get_running_app().is_loading_more):
+        if value <= 0.08 and (not self.loading_lock) and (not MDApp.get_running_app().is_loading_more):
             app = MDApp.get_running_app()
             if app and app.current_page_offset < len(app.current_product_list_source):
                 self.loading_lock = True
@@ -2471,6 +2477,7 @@ class StockApp(MDApp):
                 item_data['location'] = res.get('location')
             if res.get('source_location'):
                 item_data['source_location'] = res.get('source_location')
+            item_data['_from_split_history'] = True
             self.show_server_transaction_details(item_data, res)
 
         def on_fail(req, err):
@@ -2599,9 +2606,16 @@ class StockApp(MDApp):
                 self.rv_products.loading_lock = False
                 self.is_loading_more = False
             else:
-                self.rv_products.data = self.rv_products.data + new_data
+                old_scroll_y = self.rv_products.scroll_y
+                old_data_len = len(self.rv_products.data)
+                self.rv_products.data.extend(new_data)
                 self.current_page_offset += len(new_data)
                 self.rv_products.refresh_from_data()
+                if old_data_len > 0:
+                    new_data_len = len(self.rv_products.data)
+                    correction_factor = old_data_len / new_data_len
+                    new_scroll_y = old_scroll_y * correction_factor + (1 - correction_factor)
+                    self.rv_products.scroll_y = new_scroll_y
 
                 def unlock_scrolling(dt):
                     if self.rv_products:
@@ -5596,35 +5610,41 @@ class StockApp(MDApp):
 
     def _build_login_screen(self):
         screen = MDScreen(name='login')
+        screen.md_bg_color = (0.94, 0.95, 0.97, 1)
         layout = MDFloatLayout()
-        self.login_status_icon = MDIcon(icon='circle', font_size='15sp', pos_hint={'top': 0.96, 'right': 0.85}, theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1))
-        layout.add_widget(self.login_status_icon)
-        layout.add_widget(MDIconButton(icon='cog', pos_hint={'top': 0.98, 'right': 0.98}, on_release=self.open_ip_settings))
-        card_login = MDCard(orientation='vertical', size_hint=(0.85, None), height=dp(400), pos_hint={'center_x': 0.5, 'center_y': 0.5}, padding=dp(20), spacing=dp(15), radius=[20, 20, 20, 20], elevation=4)
-        icon_box = MDFloatLayout(size_hint_y=None, height=dp(70))
-        icon_box.add_widget(MDIcon(icon='store', font_size='60sp', pos_hint={'center_x': 0.5, 'center_y': 0.5}, theme_text_color='Primary'))
+        top_right_box = MDBoxLayout(orientation='horizontal', adaptive_size=True, spacing=dp(2), pos_hint={'center_y': 0.96, 'right': 0.98})
+        self.login_status_icon = MDIcon(icon='circle', font_size='16sp', pos_hint={'center_y': 0.5}, theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1))
+        top_right_box.add_widget(self.login_status_icon)
+        top_right_box.add_widget(MDIconButton(icon='cog-outline', pos_hint={'center_y': 0.5}, theme_text_color='Custom', text_color=(0.4, 0.4, 0.4, 1), on_release=self.open_ip_settings))
+        layout.add_widget(top_right_box)
+        card_login = MDCard(orientation='vertical', size_hint=(0.88, None), height=dp(440), pos_hint={'center_x': 0.5, 'center_y': 0.5}, padding=[dp(25), dp(30), dp(25), dp(25)], spacing=dp(12), radius=[24, 24, 24, 24], elevation=3, md_bg_color=(1, 1, 1, 1))
+        icon_box = MDFloatLayout(size_hint_y=None, height=dp(60))
+        icon_box.add_widget(MDIcon(icon='store-check', font_size='55sp', pos_hint={'center_x': 0.5, 'center_y': 0.5}, theme_text_color='Custom', text_color=(0.1, 0.45, 0.85, 1)))
         card_login.add_widget(icon_box)
-        card_login.add_widget(MDLabel(text='MagPro Vendeur', halign='center', font_style='H5', bold=True))
-        self.btn_current_magasin = MDCard(orientation='horizontal', size_hint=(1, None), height=dp(45), radius=[15, 15, 15, 15], md_bg_color=(0.1, 0.5, 0.8, 1), padding=[dp(15), 0, dp(15), 0], spacing=dp(10), ripple_behavior=True, on_release=self.open_magasin_selector)
-        self.btn_current_magasin.add_widget(MDIcon(icon='store', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='20sp', pos_hint={'center_y': 0.5}))
-        self.lbl_current_magasin = MDLabel(text='Chargement...', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='center', font_name='ArabicFont', font_size='16sp')
+        card_login.add_widget(MDLabel(text='MagPro', halign='center', font_style='H5', bold=True, adaptive_height=True, theme_text_color='Custom', text_color=(0.15, 0.15, 0.15, 1)))
+        card_login.add_widget(MDBoxLayout(size_hint_y=None, height=dp(15)))
+        self.btn_current_magasin = MDCard(orientation='horizontal', size_hint=(1, None), height=dp(48), radius=[12, 12, 12, 12], md_bg_color=(0.9, 0.94, 0.98, 1), padding=[dp(15), 0, dp(15), 0], spacing=dp(10), ripple_behavior=True, elevation=0, on_release=self.open_magasin_selector)
+        self.btn_current_magasin.add_widget(MDIcon(icon='store-marker-outline', theme_text_color='Custom', text_color=(0.1, 0.45, 0.85, 1), font_size='22sp', pos_hint={'center_y': 0.5}))
+        self.lbl_current_magasin = MDLabel(text='Chargement...', theme_text_color='Custom', text_color=(0.1, 0.35, 0.7, 1), bold=True, halign='center', font_name='ArabicFont', font_size='16sp')
         self.btn_current_magasin.add_widget(self.lbl_current_magasin)
-        self.icon_chevron_magasin = MDIcon(icon='chevron-down', theme_text_color='Custom', text_color=(1, 1, 1, 1), font_size='24sp', pos_hint={'center_y': 0.5})
+        self.icon_chevron_magasin = MDIcon(icon='chevron-down', theme_text_color='Custom', text_color=(0.1, 0.45, 0.85, 1), font_size='24sp', pos_hint={'center_y': 0.5})
         self.btn_current_magasin.add_widget(self.icon_chevron_magasin)
         card_login.add_widget(self.btn_current_magasin)
+        card_login.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
         saved_user = 'ADMIN'
         if self.store.exists('credentials'):
             saved_user = self.store.get('credentials').get('username', 'ADMIN')
         elif self.store.exists('last_login'):
             saved_user = self.store.get('last_login').get('username', 'ADMIN')
         self.current_user_name = saved_user
-        self.username_field = SmartTextField(hint_text='Utilisateur', text=self.current_user_name, icon_right='account')
-        self.password_field = SmartTextField(hint_text='Mot de passe', password=True, icon_right='key')
+        self.username_field = SmartTextField(hint_text='Utilisateur', text=self.current_user_name, icon_right='account-outline')
+        self.password_field = SmartTextField(hint_text='Mot de passe', password=True, icon_right='lock-outline')
         card_login.add_widget(self.username_field)
         card_login.add_widget(self.password_field)
-        card_login.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='18sp', size_hint_x=1, on_release=self.do_login))
+        card_login.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
+        card_login.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='16sp', font_name='RobotoBold', size_hint_x=1, size_hint_y=None, height=dp(50), md_bg_color=(0.1, 0.45, 0.85, 1), on_release=self.do_login))
         layout.add_widget(card_login)
-        footer_label = MDLabel(text='MagPro v7.8.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.02}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
+        footer_label = MDLabel(text='MagPro v7.8.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.03}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
         layout.add_widget(footer_label)
         screen.add_widget(layout)
         return screen
@@ -6990,24 +7010,30 @@ class StockApp(MDApp):
         self.prod_toolbar.title = titles.get(mode, 'Produits')
         self.theme_cls.primary_palette = colors.get(mode, 'Blue')
         self.prod_toolbar.right_action_items = []
+        from kivy.metrics import dp
         if mode == 'manage_products':
             if self.btn_add_prod not in self.prod_search_layout.children:
                 self.prod_search_layout.add_widget(self.btn_add_prod)
             if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod in self.prod_search_layout.children:
                 self.prod_search_layout.remove_widget(self.btn_scan_prod)
-            if self.cart_bar:
-                self.cart_bar.pos_hint = {'top': 0}
+            if getattr(self, 'cart_bar', None):
                 self.cart_bar.opacity = 0
                 self.cart_bar.disabled = True
+                self.cart_bar.height = 0
         else:
             if self.btn_add_prod in self.prod_search_layout.children:
                 self.prod_search_layout.remove_widget(self.btn_add_prod)
             if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
                 self.prod_search_layout.add_widget(self.btn_scan_prod)
-            if self.cart_bar:
+            if getattr(self, 'cart_bar', None):
                 self.cart_bar.pos_hint = {'y': 0}
                 self.cart_bar.opacity = 1
                 self.cart_bar.disabled = False
+                self.cart_bar.height = dp(60)
+                if self.cart_bar.parent:
+                    parent = self.cart_bar.parent
+                    parent.remove_widget(self.cart_bar)
+                    parent.add_widget(self.cart_bar)
         self.current_product_list_source = self.all_products_raw
         self.load_more_products(reset=True)
 
@@ -9180,8 +9206,11 @@ class StockApp(MDApp):
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.label import MDLabel
         from kivymd.uix.card import MDCard
-        from kivymd.uix.button import MDFillRoundFlatButton, MDFlatButton
+        from kivymd.uix.button import MDFillRoundFlatButton, MDFlatButton, MDFillRoundFlatIconButton
         from kivymd.uix.list import MDList, OneLineListItem
+        import threading
+        from kivy.metrics import dp
+        from datetime import datetime
         items = result.get('items', [])
         real_paid_amount = result.get('paid_amount')
         if real_paid_amount is None:
@@ -9253,6 +9282,7 @@ class StockApp(MDApp):
                 if abs(diff) < 0.05:
                     pay_row = MDBoxLayout(orientation='horizontal', adaptive_height=True, spacing=dp(5))
                     pay_row.add_widget(MDLabel(text='Payée', theme_text_color='Custom', text_color=(0, 0.6, 0, 1), bold=True, font_style='Subtitle1', adaptive_size=True))
+                    from kivymd.uix.label import MDIcon
                     pay_row.add_widget(MDIcon(icon='check-circle', theme_text_color='Custom', text_color=(0, 0.6, 0, 1), font_size='20sp', pos_hint={'center_y': 0.5}))
                     header_box.add_widget(pay_row)
                 else:
@@ -9263,6 +9293,7 @@ class StockApp(MDApp):
             header_box.add_widget(MDLabel(text='Transfert de stock', font_style='Caption', theme_text_color='Hint', adaptive_height=True))
         content.add_widget(header_box)
         content.add_widget(MDLabel(text='Détails:', font_style='Caption', size_hint_y=None, height=dp(20)))
+        from kivymd.uix.scrollview import MDScrollView
         scroll = MDScrollView()
         list_layout = MDList()
         if items:
@@ -9286,14 +9317,14 @@ class StockApp(MDApp):
                 list_layout.add_widget(item_box)
                 list_layout.add_widget(MDBoxLayout(size_hint_y=None, height=dp(1), md_bg_color=(0.9, 0.9, 0.9, 1)))
         else:
-            list_layout.add_widget(OneLineListItem(text='Aucun article ou opération financière'))
+            list_layout.add_widget(OneLineListItem(text='Aucun article أو عملية مالية'))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         actions_layout = MDBoxLayout(orientation='vertical', spacing='10dp', adaptive_height=True, padding=[0, '15dp', 0, 0])
         top_row = MDBoxLayout(orientation='horizontal', spacing='10dp', size_hint_y=None, height='50dp')
         pdf_only_types = ['FC', 'FP', 'FF', 'DP', 'BI', 'BE', 'BS']
-        mixed_types = ['BA', 'BV', 'TR', 'RC', 'RF']
-        if prefix not in pdf_only_types:
+        is_from_split = header_data.get('_from_split_history', False)
+        if prefix not in pdf_only_types and (not is_from_split):
 
             def do_print_bt(x):
                 print_data = header_data.copy()
@@ -9302,26 +9333,25 @@ class StockApp(MDApp):
                 threading.Thread(target=self.print_ticket_bluetooth, args=(print_data,), daemon=True).start()
             btn_print = MDFillRoundFlatButton(text='IMPRIMER', md_bg_color=(0, 0.5, 0.8, 1), text_color=(1, 1, 1, 1), size_hint_x=1, on_release=do_print_bt)
             top_row.add_widget(btn_print)
-        if prefix in pdf_only_types or prefix in mixed_types:
-            btn_text = 'PDF' if prefix in mixed_types else 'TELECHARGER PDF'
-            btn_pdf = MDFillRoundFlatButton(text=btn_text, md_bg_color=(0.8, 0.2, 0.2, 1), text_color=(1, 1, 1, 1), size_hint_x=1, on_release=lambda x: self.download_server_pdf(header_data.get('id'), prefix, header_data.get('desc', '')))
-            top_row.add_widget(btn_pdf)
+        btn_pdf = MDFillRoundFlatIconButton(text='PDF', icon='download', md_bg_color=(0.8, 0.2, 0.2, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), size_hint_x=1, on_release=lambda x: self.download_server_pdf(header_data.get('id'), prefix, header_data.get('desc', '')))
+        top_row.add_widget(btn_pdf)
         try:
             today_str = str(datetime.now().date())
             is_today = str(header_data.get('time', '')).split(' ')[0] == today_str
         except:
             is_today = False
         can_edit = not self.is_seller_mode or is_today
-        if can_edit and prefix != 'BI':
+        if can_edit and prefix != 'BI' and (not is_from_split):
             btn_edit = MDFillRoundFlatButton(text='MODIFIER', md_bg_color=(0, 0.6, 0.4, 1), text_color=(1, 1, 1, 1), size_hint_x=1, on_release=lambda x: self.load_server_transaction_for_edit(header_data, items))
             top_row.add_widget(btn_edit)
         actions_layout.add_widget(top_row)
-        if can_edit:
+        if can_edit and (not is_from_split):
             btn_del = MDFlatButton(text='SUPPRIMER CETTE OPÉRATION', theme_text_color='Custom', text_color=(0.9, 0, 0, 1), size_hint_x=1, on_release=lambda x: self.confirm_delete_server_transaction(header_data))
             actions_layout.add_widget(btn_del)
-        else:
+        elif not is_from_split:
             actions_layout.add_widget(MDLabel(text='Modification impossible (Date passée)', halign='center', theme_text_color='Error', font_style='Caption', adaptive_height=True))
         content.add_widget(actions_layout)
+        from kivymd.uix.dialog import MDDialog
         self.srv_dialog = MDDialog(title='Détails', type='custom', content_cls=content, size_hint=(0.95, 0.95), buttons=[MDFlatButton(text='FERMER', on_release=lambda x: self.srv_dialog.dismiss())])
         self.srv_dialog.open()
 
