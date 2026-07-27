@@ -2107,6 +2107,8 @@ class StockApp(MDApp):
         from kivymd.uix.label import MDLabel
         from kivymd.uix.card import MDCard
         from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.floatlayout import MDFloatLayout
+        from kivymd.uix.button import MDIconButton
         from kivy.metrics import dp
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -2142,7 +2144,7 @@ class StockApp(MDApp):
 
             def create_card(item, is_local):
                 if not item:
-                    return MDBoxLayout(size_hint_y=None, height=dp(85), md_bg_color=(0, 0, 0, 0.04), radius=[8])
+                    return MDBoxLayout(size_hint_y=None, height=dp(85), md_bg_color=(0, 0, 0, 0.04), radius=[8, 8, 8, 8])
                 doc_type = str(item.get('desc', ''))[:2].upper()
                 amount = abs(float(item.get('amount', 0)))
                 time_str = str(item.get('time', ''))
@@ -2168,17 +2170,35 @@ class StockApp(MDApp):
                     bg_color = (0.9, 0.8, 1, 1)
                     text_color = (0.5, 0, 0.8, 1)
                     doc_name = 'Ret. Fourn.'
-                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(85), padding=dp(8), radius=[8], md_bg_color=bg_color, elevation=1, ripple_behavior=True)
+                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(85), padding=dp(8), radius=[8, 8, 8, 8], md_bg_color=bg_color, elevation=1, ripple_behavior=True)
                 card.bind(on_release=lambda x: self.fetch_split_item_details(item, is_local, clean_remote_base, remote_pin))
                 card.add_widget(MDLabel(text=f'{doc_name} : {ref}', bold=True, font_style='Caption', theme_text_color='Custom', text_color=text_color))
                 card.add_widget(MDLabel(text=f'{amount:.2f} DA', bold=True, font_style='Subtitle2', theme_text_color='Primary'))
                 card.add_widget(MDBoxLayout(size_hint_y=1))
                 card.add_widget(MDLabel(text=f'{time_str} • Clic pour détails', font_style='Caption', theme_text_color='Hint'))
                 return card
+
+            def create_empty_card_with_sync_btn(source_item, is_missing_local):
+                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(85), radius=[8, 8, 8, 8], md_bg_color=(1, 1, 1, 1), elevation=1, ripple_behavior=True)
+                card.bind(on_release=lambda x: self._force_sync_missing_transfer(source_item, is_missing_local))
+                box = MDFloatLayout()
+                lbl_title = MDLabel(text='Document Manquant', theme_text_color='Primary', font_style='Caption', bold=True, halign='center', pos_hint={'center_x': 0.5, 'center_y': 0.75})
+                icon = MDIcon(icon='sync', theme_text_color='Custom', text_color=(0.1, 0.5, 0.8, 1), font_size='36sp', pos_hint={'center_x': 0.5, 'center_y': 0.35})
+                box.add_widget(lbl_title)
+                box.add_widget(icon)
+                card.add_widget(box)
+                return card
             for loc_item, rem_item in pairs:
                 row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(85), spacing=dp(5))
-                row.add_widget(create_card(loc_item, is_local=True))
-                row.add_widget(create_card(rem_item, is_local=False))
+                if loc_item and (not rem_item):
+                    row.add_widget(create_card(loc_item, is_local=True))
+                    row.add_widget(create_empty_card_with_sync_btn(loc_item, is_missing_local=False))
+                elif rem_item and (not loc_item):
+                    row.add_widget(create_empty_card_with_sync_btn(rem_item, is_missing_local=True))
+                    row.add_widget(create_card(rem_item, is_local=False))
+                else:
+                    row.add_widget(create_card(loc_item, is_local=True))
+                    row.add_widget(create_card(rem_item, is_local=False))
                 self.split_list_layout.add_widget(row)
 
         def worker():
@@ -2301,6 +2321,138 @@ class StockApp(MDApp):
             pairs.sort(key=get_sort_time, reverse=True)
             Clock.schedule_once(lambda dt: render_ui(pairs), 0)
         threading.Thread(target=worker, daemon=True).start()
+
+    def _force_sync_missing_transfer(self, source_item, is_missing_local):
+        from kivy.network.urlrequest import UrlRequest
+        from datetime import datetime
+        import json
+        import os
+        from kivy.storage.jsonstore import JsonStore
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.spinner import MDSpinner
+        from kivymd.uix.label import MDLabel
+        from kivy.metrics import dp
+        from kivy.clock import Clock
+        if getattr(self, 'is_transaction_in_progress', False):
+            return
+        self.is_transaction_in_progress = True
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, height=dp(100), padding=dp(15))
+        spinner = MDSpinner(size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_x': 0.5})
+        lbl_status = MDLabel(text='Lecture du document...', halign='center', bold=True)
+        content.add_widget(spinner)
+        content.add_widget(lbl_status)
+        self.prep_dialog = MDDialog(title='Préparation Panier', type='custom', content_cls=content, auto_dismiss=False, size_hint=(0.85, None), radius=[15, 15, 15, 15])
+        self.prep_dialog.open()
+
+        def _handle_timeout(dt):
+            if hasattr(self, 'prep_dialog') and self.prep_dialog:
+                self.prep_dialog.dismiss()
+                self.is_transaction_in_progress = False
+                self.notify("Délai d'attente dépassé. Réessayez.", 'error')
+        timeout_event = Clock.schedule_once(_handle_timeout, 8)
+        source_id = source_item.get('id')
+        is_tr_str = 'true' if source_item.get('is_transfer') else 'false'
+        if is_missing_local:
+            source_url = f"{self._split_working_url.replace('/api/submit_order', '').replace('/api/ping', '')}/api/get_transaction_details?id={source_id}&is_transfer={is_tr_str}"
+            source_headers = {'Content-type': 'application/json'}
+            if self.remote_pin:
+                source_headers['X-Server-PIN'] = str(self.remote_pin)
+            target_url = f'{self.api_base}/api/submit_order'
+            target_headers = {'Content-type': 'application/json'}
+            if self.local_pin:
+                target_headers['X-Server-PIN'] = str(self.local_pin)
+            target_entity_name = self.remote_name
+        else:
+            source_url = f'{self.api_base}/api/get_transaction_details?id={source_id}&is_transfer={is_tr_str}'
+            source_headers = {'Content-type': 'application/json'}
+            if self.local_pin:
+                source_headers['X-Server-PIN'] = str(self.local_pin)
+            target_url = f"{self._split_working_url.replace('/api/submit_order', '').replace('/api/ping', '')}/api/submit_order"
+            target_headers = {'Content-type': 'application/json'}
+            if self.remote_pin:
+                target_headers['X-Server-PIN'] = str(self.remote_pin)
+            target_entity_name = self.local_name
+
+        def on_details_success(req, res):
+            timeout_event.cancel()
+            items = res.get('items', [])
+            if not items:
+                self.prep_dialog.dismiss()
+                self.is_transaction_in_progress = False
+                self.notify('Aucun article trouvé.', 'error')
+                return
+            src_type = str(source_item.get('desc', ''))[:2].upper()
+            mapping = {'BS': 'BA', 'BA': 'BS', 'RC': 'RF', 'RF': 'RC'}
+            target_doc_type = mapping.get(src_type)
+            if not target_doc_type:
+                self.prep_dialog.dismiss()
+                self.is_transaction_in_progress = False
+                self.notify(f'Type {src_type} non supporté.', 'error')
+                return
+            target_catalog_by_barcode = {}
+            if is_missing_local:
+                if self.cache_store.exists('products'):
+                    cd = self.cache_store.get('products').get('data', [])
+                    if isinstance(cd, dict):
+                        cd = cd.get('data', list(cd.values()))
+                    for lp in cd:
+                        bc = str(lp.get('barcode', '')).strip()
+                        if bc:
+                            target_catalog_by_barcode[bc] = int(lp.get('id', 0))
+            else:
+                cache_file = os.path.join(self.user_data_dir, 'remote_stores_cache.json')
+                try:
+                    remote_cache = JsonStore(cache_file)
+                    t_name = self._split_target_server.get('name', 'Inconnu')
+                    c_key = f"store_{t_name.replace(' ', '_')}"
+                    if remote_cache.exists(c_key):
+                        for rp in remote_cache.get(c_key).get('products', []):
+                            bc = str(rp.get('barcode', '')).strip()
+                            if bc:
+                                target_catalog_by_barcode[bc] = int(rp.get('id', 0))
+                except:
+                    pass
+            self.cart = []
+            for item in items:
+                item_bc = str(item.get('barcode', '')).strip()
+                if not item_bc:
+                    for p in self.all_products_raw:
+                        if str(p.get('id')) == str(item.get('id')):
+                            item_bc = str(p.get('barcode', '')).strip()
+                            break
+                prod_id = target_catalog_by_barcode.get(item_bc, int(item.get('id', 0)))
+                self.cart.append({'id': prod_id, 'qty': float(item.get('qty', 0)), 'price': float(item.get('price', 0)), 'tva': float(item.get('tva', 0)), 'name': str(item.get('name', ''))})
+            orig_time = str(source_item.get('time', ''))
+            orig_timestamp = str(source_item.get('timestamp', ''))
+            if not orig_timestamp or orig_timestamp == 'None':
+                orig_timestamp = orig_time
+            if orig_timestamp and len(orig_timestamp) == 16:
+                orig_timestamp += ':00'
+            elif not orig_timestamp:
+                orig_timestamp = str(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            orig_desc = str(source_item.get('desc', ''))
+            mode_map = {'BS': 'remote_transfer_out', 'BA': 'remote_transfer_in', 'RF': 'remote_return_supplier', 'RC': 'remote_return_client'}
+            self.current_mode = mode_map.get(target_doc_type, 'remote_transfer_out')
+            self.target_remote_server = {'name': target_entity_name}
+            self.selected_entity = {'id': None, 'name': target_entity_name}
+            self.forced_miroir_data = {'target_url': target_url, 'target_headers': target_headers, 'target_doc_type': target_doc_type, 'target_entity_name': target_entity_name, 'timestamp': orig_timestamp, 'time': orig_time, 'desc': orig_desc}
+            self.prep_dialog.dismiss()
+            if hasattr(self, 'split_hist_dialog') and self.split_hist_dialog:
+                self.split_hist_dialog.dismiss()
+            self.update_cart_button()
+            self.refresh_cart_screen_items()
+            self.sm.transition.direction = 'left'
+            self.sm.current = 'cart'
+            self.is_transaction_in_progress = False
+            self.notify('Veuillez valider le panier et le paiement.', 'success')
+
+        def on_details_fail(req, err):
+            timeout_event.cancel()
+            self.prep_dialog.dismiss()
+            self.is_transaction_in_progress = False
+            self.notify('Erreur de récupération réseau.', 'error')
+        UrlRequest(source_url, req_headers=source_headers, timeout=6, on_success=on_details_success, on_failure=on_details_fail, on_error=on_details_fail)
 
     def fetch_split_item_details(self, item_data, is_local, remote_base_url, remote_pin):
         from kivy.network.urlrequest import UrlRequest
@@ -3974,6 +4126,13 @@ class StockApp(MDApp):
         if instance:
             instance.disabled = True
             Clock.schedule_once(lambda dt: setattr(instance, 'disabled', False), 1.0)
+        if hasattr(self, 'forced_miroir_data') and self.forced_miroir_data:
+            target_type = self.forced_miroir_data.get('target_doc_type', '')
+            if target_type == 'BA':
+                self.open_payment_dialog(instance)
+            else:
+                self._execute_forced_miroir_sync(paid_amount=0, payment_method='')
+            return
         if self.current_mode == 'request_stock':
             self.submit_stock_request()
         elif self.current_mode == 'remote_exchange':
@@ -7899,9 +8058,6 @@ class StockApp(MDApp):
         if getattr(self, 'is_transaction_in_progress', False):
             return
         self.is_transaction_in_progress = True
-        if getattr(self, 'pay_dialog', None):
-            self.pay_dialog.dismiss()
-            self.pay_dialog = None
         payment_method = ''
         if self.current_mode in ['invoice_sale', 'invoice_purchase', 'remote_transfer_out', 'remote_transfer_in']:
             if hasattr(self, 'payment_methods') and hasattr(self, 'current_method_index'):
@@ -7920,14 +8076,30 @@ class StockApp(MDApp):
             if paid_amount < total_amount and self.current_mode not in modes_sans_alerte_credit:
                 self.is_transaction_in_progress = False
                 remaining = total_amount - paid_amount
+                if getattr(self, 'pay_dialog', None):
+                    self.pay_dialog.dismiss()
+                    self.pay_dialog = None
                 self.show_credit_warning(paid_amount, total_amount, remaining)
                 return
             modes_sans_alerte_excedent = ['return_sale', 'return_purchase', 'remote_exchange']
             if paid_amount > total_amount and self.current_mode not in modes_sans_alerte_excedent:
                 self.is_transaction_in_progress = False
                 excess = paid_amount - total_amount
+                if getattr(self, 'pay_dialog', None):
+                    self.pay_dialog.dismiss()
+                    self.pay_dialog = None
                 self.show_overpayment_dialog(paid_amount, total_amount, excess)
                 return
+        if hasattr(self, 'forced_miroir_data') and self.forced_miroir_data:
+            self.is_transaction_in_progress = False
+            if getattr(self, 'pay_dialog', None):
+                self.pay_dialog.dismiss()
+                self.pay_dialog = None
+            Clock.schedule_once(lambda dt: self._execute_forced_miroir_sync(paid_amount, payment_method), 0.1)
+            return
+        if getattr(self, 'pay_dialog', None):
+            self.pay_dialog.dismiss()
+            self.pay_dialog = None
 
         def _trigger_process(dt):
             self.is_transaction_in_progress = False
@@ -7936,6 +8108,67 @@ class StockApp(MDApp):
             else:
                 self.process_transaction(paid_amount, total_amount, method=payment_method)
         Clock.schedule_once(_trigger_process, 0.1)
+
+    def _execute_forced_miroir_sync(self, paid_amount=0.0, payment_method=''):
+        from kivy.network.urlrequest import UrlRequest
+        import json
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.floatlayout import MDFloatLayout
+        from kivymd.uix.spinner import MDSpinner
+        from kivymd.uix.label import MDLabel, MDIcon
+        from kivymd.uix.button import MDFlatButton
+        from kivy.metrics import dp
+        from kivy.clock import Clock
+        from kivy.animation import Animation
+        if getattr(self, 'pay_dialog', None):
+            self.pay_dialog.dismiss()
+            self.pay_dialog = None
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, height=dp(130), padding=dp(15))
+        icon_box = MDFloatLayout(size_hint_y=None, height=dp(50))
+        spinner = MDSpinner(size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_x': 0.5, 'center_y': 0.5})
+        check_icon = MDIcon(icon='check-circle', font_size='0sp', theme_text_color='Custom', text_color=(0, 0.7, 0.2, 1), pos_hint={'center_x': 0.5, 'center_y': 0.5}, opacity=0)
+        icon_box.add_widget(spinner)
+        icon_box.add_widget(check_icon)
+        content.add_widget(icon_box)
+        lbl_status = MDLabel(text='Envoi en cours...', halign='center', bold=True)
+        content.add_widget(lbl_status)
+        sync_dialog = MDDialog(title='Validation du Miroir', type='custom', content_cls=content, auto_dismiss=False, size_hint=(0.85, None), radius=[15, 15, 15, 15])
+        sync_dialog.open()
+        data = self.forced_miroir_data
+        calc_ht, calc_tva = self.calculate_cart_totals(self.cart, False)
+        base_ttc = self._round_num(calc_ht + calc_tva)
+        payload = {'doc_type': data['target_doc_type'], 'items': self.cart, 'user_name': self.current_user_name, 'timestamp': data['timestamp'], 'time': data['time'], 'created_at': data['time'], 'purchase_location': 'store', 'location': 'store', 'entity_name': data['target_entity_name'], 'entity': data['target_entity_name'], 'payment_info': {'amount': float(paid_amount), 'total': base_ttc, 'method': payment_method if payment_method else 'Espèce', 'timbre': 0.0}, 'is_transfer': True, 'notes': data['desc']}
+
+        def on_submit_success(req, res):
+            if res.get('status') == 'success':
+                spinner.active = False
+                spinner.opacity = 0
+                lbl_status.text = 'Opération réussie !'
+                lbl_status.theme_text_color = 'Custom'
+                lbl_status.text_color = (0, 0.7, 0.2, 1)
+                check_icon.opacity = 1
+                anim = Animation(font_size=dp(55), d=0.4, t='out_back')
+                anim.start(check_icon)
+
+                def finish_all(dt):
+                    sync_dialog.dismiss()
+                    self.notify('Opération miroir réussie !', 'success')
+                    self.forced_miroir_data = None
+                    self.cart = []
+                    self.update_cart_button()
+                    self.go_back()
+                Clock.schedule_once(finish_all, 1.5)
+            else:
+                sync_dialog.dismiss()
+                err_msg = res.get('message', 'Erreur inconnue')
+                err_dialog = MDDialog(title='Erreur', text=err_msg, buttons=[MDFlatButton(text='OK', on_release=lambda x: err_dialog.dismiss())])
+                err_dialog.open()
+
+        def on_submit_fail(req, err):
+            sync_dialog.dismiss()
+            self.notify('Échec de connexion au serveur cible.', 'error')
+        UrlRequest(data['target_url'], req_body=json.dumps(payload), req_headers=data['target_headers'], method='POST', on_success=on_submit_success, on_failure=on_submit_fail, on_error=on_submit_fail)
 
     def _cycle_payment_method(self, instance):
         self.current_method_index = (self.current_method_index + 1) % len(self.payment_methods)
@@ -8665,20 +8898,31 @@ class StockApp(MDApp):
                 self.confirm_del_dialog.dismiss()
             if self.srv_dialog:
                 self.srv_dialog.dismiss()
+
+            def finalize_local_deletion():
+                self._reset_notification_state(0)
+                target_date = getattr(self, 'history_view_date', datetime.now().date())
+                self.filter_history_list(specific_date=target_date)
+                if hasattr(self, 'split_hist_dialog') and getattr(self, 'split_hist_dialog', None):
+                    self._trigger_split_fetch()
             if is_synced:
                 server_id = data.get('server_id')
                 is_tr = doc_type == 'TR'
                 if server_id and self.is_server_reachable:
-                    UrlRequest(f'{self.api_base}/api/delete_transaction', req_body=json.dumps({'server_id': server_id, 'is_transfer': is_tr}), req_headers={'Content-type': 'application/json'}, method='POST', on_success=lambda r, s: self.offline_store.delete(key) or self.notify('Supprimé du Serveur', 'success'), on_failure=lambda r, e: self.notify('Echec suppression serveur', 'error'))
+
+                    def on_sync_del_success(r, s):
+                        self.offline_store.delete(key)
+                        self.notify('Supprimé du Serveur', 'success')
+                        finalize_local_deletion()
+                    UrlRequest(f'{self.api_base}/api/delete_transaction', req_body=json.dumps({'server_id': server_id, 'is_transfer': is_tr}), req_headers={'Content-type': 'application/json'}, method='POST', on_success=on_sync_del_success, on_failure=lambda r, e: self.notify('Echec suppression serveur', 'error'))
                 else:
                     self.offline_store.delete(key)
                     self.notify('Supprimé (Local)', 'info')
+                    finalize_local_deletion()
             else:
                 self.offline_store.delete(key)
                 self.notify('Supprimé (Local)', 'info')
-            self._reset_notification_state(0)
-            target_date = getattr(self, 'history_view_date', datetime.now().date())
-            self.filter_history_list(specific_date=target_date)
+                finalize_local_deletion()
 
         def show_confirmation(x):
             self.confirm_del_dialog = MDDialog(title='Confirmation', text='Voulez-vous vraiment supprimer cette opération ?\nCette action est irréversible.', buttons=[MDFlatButton(text='NON', on_release=lambda y: self.confirm_del_dialog.dismiss()), MDRaisedButton(text='OUI', md_bg_color=(0.8, 0, 0, 1), text_color=(1, 1, 1, 1), on_release=do_delete)])
@@ -9172,7 +9416,13 @@ class StockApp(MDApp):
         else:
             trans_id = item_data_or_id
             is_transfer = False
-        UrlRequest(f'{self.api_base}/api/delete_transaction', req_body=json.dumps({'server_id': trans_id, 'is_transfer': is_transfer}), req_headers={'Content-type': 'application/json'}, method='POST', on_success=lambda r, s: self.notify('Supprimé avec succès', 'success') or self.filter_history_list(0), on_failure=lambda r, e: self.notify('Echec suppression', 'error'))
+
+        def on_delete_success(req, result):
+            self.notify('Supprimé avec succès', 'success')
+            self.filter_history_list(0)
+            if hasattr(self, 'split_hist_dialog') and getattr(self, 'split_hist_dialog', None):
+                self._trigger_split_fetch()
+        UrlRequest(f'{self.api_base}/api/delete_transaction', req_body=json.dumps({'server_id': trans_id, 'is_transfer': is_transfer}), req_headers={'Content-type': 'application/json'}, method='POST', on_success=on_delete_success, on_failure=lambda r, e: self.notify('Echec suppression', 'error'))
 
     def load_server_transaction_for_edit(self, header_data, items):
         if hasattr(self, 'srv_dialog') and self.srv_dialog:
@@ -9183,6 +9433,8 @@ class StockApp(MDApp):
             self.mgmt_dialog.dismiss()
         if hasattr(self, 'pending_dialog') and self.pending_dialog:
             self.pending_dialog.dismiss()
+        if hasattr(self, 'split_hist_dialog') and self.split_hist_dialog:
+            self.split_hist_dialog.dismiss()
         self.current_editing_date = header_data.get('time') or header_data.get('timestamp')
         found_entity = None
         search_name = header_data.get('entity', '').strip()
