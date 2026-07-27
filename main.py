@@ -1103,37 +1103,35 @@ class StockApp(MDApp):
         def build_items_payload(source_cart, is_remote=False):
             nonlocal validation_error, bad_product_name, bad_reason
             payload = []
-            remote_catalog_by_barcode = {}
+            target_catalog_by_barcode = {}
             if is_remote:
                 import os
                 from kivy.storage.jsonstore import JsonStore
                 cache_file = os.path.join(self.user_data_dir, 'remote_stores_cache.json')
                 try:
                     remote_cache = JsonStore(cache_file)
+                    t_name = self.target_remote_server.get('name', 'Inconnu')
+                    c_key = f"store_{t_name.replace(' ', '_')}"
+                    if remote_cache.exists(c_key):
+                        for rp in remote_cache.get(c_key).get('products', []):
+                            bc = str(rp.get('barcode', '')).strip()
+                            if bc:
+                                target_catalog_by_barcode[bc] = int(rp.get('id', 0))
                 except Exception as e:
-                    print(f'[CORRUPTION DETECTED] Resetting remote_stores_cache.json in submit due to error: {e}')
-                    try:
-                        if os.path.exists(cache_file):
-                            os.remove(cache_file)
-                    except:
-                        pass
-                    remote_cache = JsonStore(cache_file)
-                t_name = self.target_remote_server.get('name', 'Inconnu')
-                c_key = f"store_{t_name.replace(' ', '_')}"
-                if remote_cache.exists(c_key):
-                    for rp in remote_cache.get(c_key).get('products', []):
-                        bc = str(rp.get('barcode', '')).strip()
-                        if bc:
-                            remote_catalog_by_barcode[bc] = int(rp.get('id', 0))
-            local_catalog_by_barcode = {}
-            if self.cache_store.exists('products'):
+                    pass
+            elif self.cache_store.exists('products'):
                 cd = self.cache_store.get('products').get('data', [])
                 if isinstance(cd, dict):
                     cd = cd.get('data', list(cd.values()))
                 for lp in cd:
                     bc = str(lp.get('barcode', '')).strip()
                     if bc:
-                        local_catalog_by_barcode[bc] = int(lp.get('id', 0))
+                        target_catalog_by_barcode[bc] = int(lp.get('id', 0))
+            else:
+                for lp in self.all_products_raw:
+                    bc = str(lp.get('barcode', '')).strip()
+                    if bc:
+                        target_catalog_by_barcode[bc] = int(lp.get('id', 0))
             for item in source_cart:
                 item_barcode = str(item.get('barcode', '')).strip()
                 if not item_barcode:
@@ -1144,26 +1142,14 @@ class StockApp(MDApp):
                 if not item_barcode:
                     validation_error = True
                     bad_product_name = str(item.get('name', 'Article'))
-                    bad_reason = "Ce produit n'a pas de Code-Barres."
+                    bad_reason = 'Opération bloquée: Produit sans Code-Barres.'
                     return []
-                prod_id = None
-                if is_remote:
-                    if item_barcode in remote_catalog_by_barcode:
-                        prod_id = remote_catalog_by_barcode[item_barcode]
-                    else:
-                        validation_error = True
-                        bad_product_name = str(item.get('name', 'Article'))
-                        bad_reason = f"L'autre magasin ne connait pas ce produit."
-                        return []
-                elif item_barcode in local_catalog_by_barcode:
-                    prod_id = local_catalog_by_barcode[item_barcode]
-                else:
-                    prod_id = int(item.get('id', 0))
-                if not prod_id:
+                if item_barcode not in target_catalog_by_barcode:
                     validation_error = True
                     bad_product_name = str(item.get('name', 'Article'))
-                    bad_reason = "Problème d'identification du produit."
+                    bad_reason = f'Opération bloquée: Le magasin ne reconnait pas ce Code-Barres ({item_barcode}).'
                     return []
+                prod_id = target_catalog_by_barcode[item_barcode]
                 payload.append({'id': prod_id, 'qty': float(item.get('qty', 0)), 'price': float(item.get('price', 0)), 'tva': float(item.get('tva', 0)), 'name': str(item.get('name', ''))})
             return payload
         local_payloads = []
@@ -1235,7 +1221,7 @@ class StockApp(MDApp):
             self.is_transaction_in_progress = False
             from kivymd.uix.dialog import MDDialog
             from kivymd.uix.button import MDFlatButton
-            self.dialog = MDDialog(title='Opération Bloquée', text=f'Le produit:\n[b]{bad_product_name}[/b]\n\n{bad_reason}\n\nVeuillez synchroniser les articles entre les magasins pour régler ce problème.', buttons=[MDFlatButton(text='COMPRIS', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
+            self.dialog = MDDialog(title='Opération Bloquée', text=f'Le produit:\n[b]{bad_product_name}[/b]\n\n{bad_reason}\n\nAssurez-vous que le produit possède un Code-Barres identique dans les deux magasins.', buttons=[MDFlatButton(text='COMPRIS', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())])
             self.dialog.open()
             return
         remote_url = self.target_remote_url
@@ -2421,8 +2407,14 @@ class StockApp(MDApp):
                         if str(p.get('id')) == str(item.get('id')):
                             item_bc = str(p.get('barcode', '')).strip()
                             break
-                prod_id = target_catalog_by_barcode.get(item_bc, int(item.get('id', 0)))
-                self.cart.append({'id': prod_id, 'qty': float(item.get('qty', 0)), 'price': float(item.get('price', 0)), 'tva': float(item.get('tva', 0)), 'name': str(item.get('name', ''))})
+                if not item_bc or item_bc not in target_catalog_by_barcode:
+                    self.prep_dialog.dismiss()
+                    self.is_transaction_in_progress = False
+                    error_msg = f"Opération bloquée: Produit '{item.get('name')}' sans code-barres ou introuvable."
+                    self.notify(error_msg, 'error')
+                    return
+                prod_id = target_catalog_by_barcode[item_bc]
+                self.cart.append({'id': prod_id, 'barcode': item_bc, 'qty': float(item.get('qty', 0)), 'price': float(item.get('price', 0)), 'tva': float(item.get('tva', 0)), 'name': str(item.get('name', ''))})
             orig_time = str(source_item.get('time', ''))
             orig_timestamp = str(source_item.get('timestamp', ''))
             if not orig_timestamp or orig_timestamp == 'None':
@@ -2547,18 +2539,16 @@ class StockApp(MDApp):
                 def update_ui():
                     if not final_list:
                         if not is_from_cache:
-                            self.notify('Aucun produit commun trouvé (Même Code-barres).', 'error')
+                            self.notify('Aucun produit commun avec Code-Barres trouvé.', 'error')
                     elif is_from_cache:
-                        msg = 'Mode Lecture (Cache) : Ajout bloqué.'
-                        self.notify(f'{len(final_list)} Produits compatibles.', 'warning')
+                        self.notify(f'{len(final_list)} Produits compatibles par Code-Barres.', 'warning')
                     else:
                         self.is_remote_live_data = True
-                        msg = 'Seuls les produits avec Code-Barres identique sont affichés !'
-                        self.notify(f'{len(final_list)} Produits synchronisés.', 'success')
+                        self.notify(f'{len(final_list)} Produits synchronisés (Code-Barres).', 'success')
                     self.prepare_products_for_rv(final_list)
                 update_ui()
             except Exception as e:
-                pass
+                print(f'Error filtering remote products: {e}')
         has_cache = remote_cache.exists(cache_key)
         if has_cache:
             cached_data = remote_cache.get(cache_key)
