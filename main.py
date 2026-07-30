@@ -2136,42 +2136,45 @@ class StockApp(MDApp):
 
             def create_card(item, is_local):
                 if not item:
-                    return MDBoxLayout(size_hint_y=None, height=dp(85), md_bg_color=(0, 0, 0, 0.04), radius=[8, 8, 8, 8])
+                    return MDBoxLayout(size_hint_y=None, height=dp(115), md_bg_color=(0, 0, 0, 0.04), radius=[8, 8, 8, 8])
                 doc_type = str(item.get('desc', ''))[:2].upper()
                 amount = abs(float(item.get('amount', 0)))
-                time_str = str(item.get('time', ''))
-                if ' ' in time_str:
-                    time_str = time_str.split(' ')[0][5:] + ' ' + time_str.split(' ')[1][:5]
+                raw_time = str(item.get('time', ''))
+                time_str = raw_time[:16] if len(raw_time) >= 16 else raw_time
                 ref = get_real_receipt_number(item)
                 bg_color = (1, 1, 1, 1)
                 text_color = (0.2, 0.2, 0.2, 1)
                 doc_name = doc_type
                 if doc_type == 'BS':
-                    bg_color = (1, 0.9, 0.9, 1)
+                    bg_color = (1, 0.92, 0.92, 1)
                     text_color = (0.8, 0.1, 0.1, 1)
-                    doc_name = 'Sortie'
+                    doc_name = 'SORTIE'
                 elif doc_type == 'BA':
-                    bg_color = (0.9, 1, 0.9, 1)
+                    bg_color = (0.92, 1, 0.92, 1)
                     text_color = (0.1, 0.6, 0.1, 1)
-                    doc_name = 'Entrée'
+                    doc_name = 'ENTRÉE'
                 elif doc_type == 'RC':
-                    bg_color = (1, 0.95, 0.8, 1)
+                    bg_color = (1, 0.95, 0.85, 1)
                     text_color = (0.8, 0.5, 0, 1)
-                    doc_name = 'Ret. Client'
+                    doc_name = 'RET. CLIENT'
                 elif doc_type == 'RF':
-                    bg_color = (0.9, 0.8, 1, 1)
+                    bg_color = (0.92, 0.85, 1, 1)
                     text_color = (0.5, 0, 0.8, 1)
-                    doc_name = 'Ret. Fourn.'
-                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(85), padding=dp(8), radius=[8, 8, 8, 8], md_bg_color=bg_color, elevation=1, ripple_behavior=True)
+                    doc_name = 'RET. FOURN'
+                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(115), padding=[dp(5), dp(10), dp(5), dp(8)], radius=[10], md_bg_color=bg_color, elevation=1, ripple_behavior=True)
                 card.bind(on_release=lambda x: self.fetch_split_item_details(item, is_local, clean_remote_base, remote_pin))
-                card.add_widget(MDLabel(text=f'{doc_name} : {ref}', bold=True, font_style='Caption', theme_text_color='Custom', text_color=text_color))
-                card.add_widget(MDLabel(text=f'{amount:.2f} DA', bold=True, font_style='Subtitle2', theme_text_color='Primary'))
+                card.add_widget(MDLabel(text=doc_name, bold=True, font_style='Subtitle2', halign='center', theme_text_color='Custom', text_color=text_color, size_hint_y=None, height=dp(20)))
+                card.add_widget(MDLabel(text=ref, font_style='Caption', halign='center', theme_text_color='Custom', text_color=(0.5, 0.5, 0.5, 1), size_hint_y=None, height=dp(15)))
+                card.add_widget(MDLabel(text=f'{amount:.2f} DA', bold=True, font_style='Subtitle1', halign='center', theme_text_color='Custom', text_color=(0.1, 0.1, 0.1, 1), size_hint_y=None, height=dp(25)))
                 card.add_widget(MDBoxLayout(size_hint_y=1))
-                card.add_widget(MDLabel(text=f'{time_str} • Clic pour détails', font_style='Caption', theme_text_color='Hint'))
+                date_box = MDCard(size_hint=(None, None), size=(dp(110), dp(20)), md_bg_color=(0, 0, 0, 0.06), radius=[4], elevation=0, pos_hint={'center_x': 0.5})
+                date_label = MDLabel(text=time_str, font_style='Caption', bold=True, halign='center', theme_text_color='Custom', text_color=(0.3, 0.3, 0.3, 1))
+                date_box.add_widget(date_label)
+                card.add_widget(date_box)
                 return card
 
             def create_empty_card_with_sync_btn(source_item, is_missing_local):
-                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(85), radius=[8, 8, 8, 8], md_bg_color=(1, 1, 1, 1), elevation=1, ripple_behavior=True)
+                card = MDCard(orientation='vertical', size_hint_y=None, height=dp(115), radius=[10], md_bg_color=(1, 1, 1, 1), elevation=1, ripple_behavior=True)
                 card.bind(on_release=lambda x: self._force_sync_missing_transfer(source_item, is_missing_local))
                 box = MDFloatLayout()
                 lbl_title = MDLabel(text='Document Manquant', theme_text_color='Primary', font_style='Caption', bold=True, halign='center', pos_hint={'center_x': 0.5, 'center_y': 0.75})
@@ -2181,7 +2184,7 @@ class StockApp(MDApp):
                 card.add_widget(box)
                 return card
             for loc_item, rem_item in pairs:
-                row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(85), spacing=dp(5))
+                row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(115), spacing=dp(5))
                 if loc_item and (not rem_item):
                     row.add_widget(create_card(loc_item, is_local=True))
                     row.add_widget(create_empty_card_with_sync_btn(loc_item, is_missing_local=False))
@@ -2224,13 +2227,10 @@ class StockApp(MDApp):
                 target = target_name.lower().strip()
                 if ent == target:
                     return True
-                ent_words = ent.split()
-                target_words = target.split()
-                if target_words and all((w in ent_words for w in target_words)):
-                    return True
-                if f'vers: {target}' in desc or f'depuis: {target}' in desc:
-                    return True
-                if '[id:tr-' in desc and target in ent:
+                import re
+                target_esc = re.escape(target)
+                pattern = f'(?:vers|depuis|de):\\s*{target_esc}(?:\\s|$| \\[id:tr-)'
+                if re.search(pattern, desc):
                     return True
                 return False
             loc_filtered = [it for it in local_data if is_strictly_between(it, remote_name)] if local_data else []
@@ -5966,18 +5966,8 @@ class StockApp(MDApp):
 
     def _build_products_screen(self):
         screen = MDScreen(name='products')
-        root_layout = MDFloatLayout()
-        self.rv_products = ProductRecycleView()
-        self.rv_products.size_hint = (1, 1)
-        self.rv_products.pos_hint = {'center_x': 0.5, 'center_y': 0.5}
-
-        def set_rv_padding(dt):
-            if hasattr(self.rv_products, 'layout_manager') and self.rv_products.layout_manager:
-                self.rv_products.layout_manager.padding = [dp(5), dp(220), dp(5), dp(70)]
-        Clock.schedule_once(set_rv_padding, 0.1)
-        root_layout.add_widget(self.rv_products)
+        root_layout = MDBoxLayout(orientation='vertical')
         header_container = MDBoxLayout(orientation='vertical', adaptive_height=True, md_bg_color=(1, 1, 1, 1))
-        header_container.pos_hint = {'top': 1}
         self.prod_toolbar = MDTopAppBar(title='Produits', left_action_items=[['arrow-left', lambda x: self.go_back()]], elevation=2)
         header_container.add_widget(self.prod_toolbar)
         self.prod_search_layout = MDBoxLayout(orientation='horizontal', padding=[dp(10), dp(5), dp(10), dp(0)], spacing=dp(5), size_hint_y=None, height=dp(55), md_bg_color=(1, 1, 1, 1))
@@ -6004,7 +5994,15 @@ class StockApp(MDApp):
         from kivymd.uix.card import MDSeparator
         header_container.add_widget(MDSeparator(height=dp(1), color=(0.9, 0.9, 0.9, 1)))
         root_layout.add_widget(header_container)
-        self.cart_bar = MDCard(size_hint_y=None, height=dp(60), padding=[dp(15), dp(5)], md_bg_color=self.theme_cls.primary_color, radius=[15, 15, 0, 0], ripple_behavior=True, on_release=self.open_cart_screen, elevation=4, pos_hint={'y': 0})
+        self.rv_products = ProductRecycleView()
+        self.rv_products.size_hint_y = 1
+
+        def set_rv_padding(dt):
+            if hasattr(self.rv_products, 'layout_manager') and self.rv_products.layout_manager:
+                self.rv_products.layout_manager.padding = [dp(5), dp(5), dp(5), dp(5)]
+        Clock.schedule_once(set_rv_padding, 0.1)
+        root_layout.add_widget(self.rv_products)
+        self.cart_bar = MDCard(size_hint_y=None, height=dp(60), padding=[dp(15), dp(5)], md_bg_color=self.theme_cls.primary_color, radius=[15, 15, 0, 0], ripple_behavior=True, on_release=self.open_cart_screen, elevation=4)
         cart_box = MDBoxLayout(orientation='horizontal')
         self.lbl_cart_count = MDLabel(text='PANIER (0)', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='left', size_hint_x=0.5, font_style='Subtitle1')
         self.lbl_cart_total = MDLabel(text='0.00 DA', theme_text_color='Custom', text_color=(1, 1, 1, 1), bold=True, halign='right', font_style='H6', size_hint_x=0.5)
@@ -7019,6 +7017,7 @@ class StockApp(MDApp):
             if getattr(self, 'cart_bar', None):
                 self.cart_bar.opacity = 0
                 self.cart_bar.disabled = True
+                self.cart_bar.size_hint_y = None
                 self.cart_bar.height = 0
         else:
             if self.btn_add_prod in self.prod_search_layout.children:
@@ -7026,14 +7025,10 @@ class StockApp(MDApp):
             if hasattr(self, 'btn_scan_prod') and self.btn_scan_prod not in self.prod_search_layout.children:
                 self.prod_search_layout.add_widget(self.btn_scan_prod)
             if getattr(self, 'cart_bar', None):
-                self.cart_bar.pos_hint = {'y': 0}
                 self.cart_bar.opacity = 1
                 self.cart_bar.disabled = False
+                self.cart_bar.size_hint_y = None
                 self.cart_bar.height = dp(60)
-                if self.cart_bar.parent:
-                    parent = self.cart_bar.parent
-                    parent.remove_widget(self.cart_bar)
-                    parent.add_widget(self.cart_bar)
         self.current_product_list_source = self.all_products_raw
         self.load_more_products(reset=True)
 
