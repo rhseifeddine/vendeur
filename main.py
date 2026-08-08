@@ -236,12 +236,6 @@ class CartRecycleItem(RecycleDataViewBehavior, MDCard):
     def on_delete(self):
         MDApp.get_running_app().remove_from_cart(self.raw_data)
 
-class CartRecycleView(RecycleView):
-
-    def __init__(self, **kwargs):
-        super(CartRecycleView, self).__init__(**kwargs)
-        self.data = []
-
 class NoMenuTextField(MDTextField):
 
     def _show_cut_copy_paste(self, pos, selection, mode=None):
@@ -493,23 +487,37 @@ class EntityRecycleItem(RecycleDataViewBehavior, MDCard):
         if self.entity_data:
             app.select_entity_from_rv(self.entity_data)
 
+class CartRecycleView(RecycleView):
+
+    def __init__(self, **kwargs):
+        super(CartRecycleView, self).__init__(**kwargs)
+        self.data = []
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda dt: setattr(self.effect_y, 'friction', 0.12) if hasattr(self, 'effect_y') else None, 0)
+
 class HistoryRecycleView(RecycleView):
 
     def __init__(self, **kwargs):
         super(HistoryRecycleView, self).__init__(**kwargs)
         self.data = []
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda dt: setattr(self.effect_y, 'friction', 0.12) if hasattr(self, 'effect_y') else None, 0)
 
 class MgmtEntityRecycleView(RecycleView):
 
     def __init__(self, **kwargs):
         super(MgmtEntityRecycleView, self).__init__(**kwargs)
         self.data = []
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda dt: setattr(self.effect_y, 'friction', 0.12) if hasattr(self, 'effect_y') else None, 0)
 
 class EntityRecycleView(RecycleView):
 
     def __init__(self, **kwargs):
         super(EntityRecycleView, self).__init__(**kwargs)
         self.data = []
+        from kivy.clock import Clock
+        Clock.schedule_once(lambda dt: setattr(self.effect_y, 'friction', 0.12) if hasattr(self, 'effect_y') else None, 0)
 
 class ProductRecycleView(RecycleView):
     loading_lock = False
@@ -1105,6 +1113,9 @@ class StockApp(MDApp):
         validation_error = False
         bad_product_name = ''
         bad_reason = ''
+        print_on_server_flag = False
+        if self.store and self.store.exists('printer_config'):
+            print_on_server_flag = self.store.get('printer_config').get('auto_server', False)
 
         def build_items_payload(source_cart, is_remote=False):
             nonlocal validation_error, bad_product_name, bad_reason
@@ -1180,7 +1191,7 @@ class StockApp(MDApp):
             total_amt = sum((float(i['qty']) * float(i['price']) for i in items))
             final_paid = total_amt if is_exchange else paid_amount
             final_method = 'Espèce' if is_exchange else payment_method if payment_method else 'Espèce'
-            return {'doc_type': doc_type, 'items': items, 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(final_paid), 'total': float(total_amt), 'method': final_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc, 'is_transfer': True}
+            return {'doc_type': doc_type, 'items': items, 'amount': float(total_amt), 'user_name': self.current_user_name, 'timestamp': creation_timestamp, 'payment_info': {'amount': float(final_paid), 'total': float(total_amt), 'method': final_method, 'timbre': 0.0}, 'notes': notes, 'entity': entity_name, 'entity_name': entity_name, 'location': loc, 'purchase_location': loc, 'is_transfer': True, 'print_on_server': print_on_server_flag}
         if self.current_mode == 'remote_transfer_out':
             i_local = build_items_payload(self.cart, False)
             i_remote = build_items_payload(self.cart, True)
@@ -1401,6 +1412,17 @@ class StockApp(MDApp):
             current_req['server_id'] = result.get('server_id')
             current_req['server_saved_count'] = result.get('saved_count', 0)
             current_req['invoice_number'] = result.get('invoice_number', 'Inconnu')
+            try:
+                if self.store and self.store.exists('printer_config'):
+                    conf = self.store.get('printer_config')
+                    if conf.get('auto', False) and conf.get('mac', ''):
+                        print_payload = current_req['payload'].copy()
+                        print_payload['invoice_number'] = current_req['invoice_number']
+                        if current_req['server_id']:
+                            print_payload['server_id'] = current_req['server_id']
+                        threading.Thread(target=self.print_ticket_bluetooth, args=(print_payload,), daemon=True).start()
+            except Exception as e:
+                print(f'Auto print sync error: {e}')
             self.sync_engine_state['current_index'] += 1
             self._process_next_sync_request()
 
@@ -1735,6 +1757,200 @@ class StockApp(MDApp):
                 continue
         self._append_to_rv(rv_data, reset)
 
+    def fetch_and_show_remote_stock(self, target_server, working_url):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.spinner import MDSpinner
+        from kivymd.uix.label import MDLabel
+        from kivy.metrics import dp
+        import threading
+        loading_content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, height=dp(80), padding=dp(10))
+        loading_content.add_widget(MDSpinner(size_hint=(None, None), size=(dp(30), dp(30)), pos_hint={'center_x': 0.5}))
+        loading_content.add_widget(MDLabel(text='Téléchargement du catalogue...', halign='center'))
+        self.stock_loading_dialog = MDDialog(title=f"Connexion: {target_server.get('name')}", type='custom', content_cls=loading_content, auto_dismiss=False)
+        self.stock_loading_dialog.open()
+
+        def fetch_worker():
+            import requests
+            import urllib3
+            from kivy.clock import Clock
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            try:
+                base_url = working_url.split('/api/')[0]
+                fetch_url = f'{base_url}/api/products?limit=999999'
+            except:
+                fetch_url = working_url
+            headers = {'Accept': 'application/json'}
+            pin = target_server.get('pin', '')
+            if pin:
+                headers['X-Server-PIN'] = str(pin)
+            try:
+                response = requests.get(fetch_url, headers=headers, timeout=12, verify=False)
+                if response.status_code == 200:
+                    res_json = response.json()
+                    prods = []
+                    if isinstance(res_json, dict):
+                        if 'data' in res_json and isinstance(res_json['data'], list):
+                            prods = res_json['data']
+                        else:
+                            prods = list(res_json.values())
+                    elif isinstance(res_json, list):
+                        prods = res_json
+                    self.temp_remote_stock_list = prods
+                    Clock.schedule_once(lambda dt: self._show_remote_stock_ui(target_server.get('name')), 0)
+                else:
+                    Clock.schedule_once(lambda dt: self._fail_remote_stock('Erreur Serveur'), 0)
+            except Exception as e:
+                Clock.schedule_once(lambda dt: self._fail_remote_stock(f'Erreur Connexion: {e}'), 0)
+        threading.Thread(target=fetch_worker, daemon=True).start()
+
+    def _fail_remote_stock(self, error_msg):
+        if hasattr(self, 'stock_loading_dialog') and self.stock_loading_dialog:
+            self.stock_loading_dialog.dismiss()
+        self.notify(error_msg, 'error')
+
+    def _show_remote_stock_ui(self, store_name):
+        if hasattr(self, 'stock_loading_dialog') and self.stock_loading_dialog:
+            self.stock_loading_dialog.dismiss()
+        from kivy.lang import Builder
+        from kivy.metrics import dp
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.button import MDFlatButton, MDIconButton
+        from kivy.uix.recycleview import RecycleView
+        if not getattr(self, '_remote_stock_kv_loaded', False):
+            Builder.load_string('\n<RemoteStockItemRV@MDBoxLayout>:\n    orientation: \'horizontal\'\n    padding: dp(15)\n    spacing: dp(10)\n    size_hint_y: None\n    height: dp(60)\n    md_bg_color: 1, 1, 1, 1\n    name_str: \'\'\n    qty_str: \'\'\n    qty_color: 0, 0, 0, 1\n\n    MDLabel:\n        text: root.name_str\n        font_style: "Subtitle1"\n        bold: True\n        theme_text_color: "Primary"\n        size_hint_x: 0.7\n        font_name: \'ArabicFont\'\n\n    MDLabel:\n        text: root.qty_str\n        font_style: "H6"\n        bold: True\n        theme_text_color: "Custom"\n        text_color: root.qty_color\n        halign: "right"\n        size_hint_x: 0.3\n        font_name: \'ArabicFont\'\n\n<RemoteStockRV@RecycleView>:\n    viewclass: \'RemoteStockItemRV\'\n    RecycleBoxLayout:\n        default_size: None, dp(60)\n        default_size_hint: 1, None\n        size_hint_y: None\n        height: self.minimum_height\n        orientation: \'vertical\'\n        spacing: dp(2)\n        padding: dp(5)\n            ')
+            self._remote_stock_kv_loaded = True
+
+        class RemoteStockRV(RecycleView):
+
+            def __init__(self, app_ref, **kwargs):
+                super().__init__(**kwargs)
+                self.app_ref = app_ref
+                from kivy.clock import Clock
+
+                def apply_friction(dt):
+                    if hasattr(self, 'effect_y'):
+                        self.effect_y.friction = 0.12
+                Clock.schedule_once(apply_friction, 0)
+
+            def on_scroll_y(self, instance, value):
+                if value <= 0.05 and (not getattr(self.app_ref, 'remote_stock_loading_lock', False)):
+                    self.app_ref._load_more_remote_stock()
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, height=dp(550))
+        search_row = MDBoxLayout(orientation='horizontal', spacing=dp(5), size_hint_y=None, height=dp(45))
+        self.remote_stock_search = SmartTextField(hint_text='Rechercher un produit...', icon_right='magnify', size_hint_x=0.85)
+        self.btn_sort_remote = MDIconButton(icon='sort-alphabetical-variant', theme_text_color='Custom', text_color=(0.2, 0.2, 0.2, 1), md_bg_color=(0.95, 0.95, 0.95, 1), size_hint=(None, None), size=(dp(45), dp(45)), pos_hint={'center_y': 0.5}, on_release=self._toggle_remote_stock_sort)
+        search_row.add_widget(self.remote_stock_search)
+        search_row.add_widget(self.btn_sort_remote)
+        content.add_widget(search_row)
+        self.remote_stock_rv = RemoteStockRV(self)
+        content.add_widget(self.remote_stock_rv)
+        self.remote_stock_search.bind(text=lambda inst, txt: self.filter_remote_stock_list(txt))
+        self.remote_stock_dialog = MDDialog(title=self.fix_text(f'Stock: {store_name}'), type='custom', content_cls=content, size_hint=(0.95, 0.95), buttons=[MDFlatButton(text='FERMER', theme_text_color='Error', on_release=lambda x: self.remote_stock_dialog.dismiss())])
+        self.remote_stock_sort_mode = 'name'
+        self.remote_stock_offset = 0
+        self.remote_stock_loading_lock = False
+        self._filtered_remote_stock_source = []
+        self.remote_stock_dialog.open()
+        self.filter_remote_stock_list('')
+
+    def filter_remote_stock_list(self, query):
+        if not hasattr(self, 'temp_remote_stock_list') or not hasattr(self, 'remote_stock_rv'):
+            return
+        q_lower = str(query).lower().strip()
+        filtered = []
+        if q_lower:
+            for p in self.temp_remote_stock_list:
+                if q_lower in str(p.get('name', '')).lower() or q_lower in str(p.get('barcode', '')).lower():
+                    filtered.append(p)
+        else:
+            filtered = list(self.temp_remote_stock_list)
+        filtered = [p for p in filtered if not self.fix_text(str(p.get('name', ''))).lower().startswith('autre article')]
+
+        def get_real_qty(p):
+            s_context = float(p.get('stock', 0) or 0)
+            return float(p.get('real_stock_store', p.get('stock_store', s_context)) or 0)
+        sort_mode = getattr(self, 'remote_stock_sort_mode', 'name')
+        if sort_mode == 'qty':
+            filtered.sort(key=lambda x: get_real_qty(x))
+        else:
+            filtered.sort(key=lambda x: str(x.get('name', '')).lower())
+        self._filtered_remote_stock_source = filtered
+        self.remote_stock_offset = 0
+        self.remote_stock_loading_lock = False
+        self.remote_stock_rv.data = []
+        self.remote_stock_rv.scroll_y = 1.0
+        self._load_more_remote_stock()
+
+    def _toggle_remote_stock_sort(self, instance):
+        if not hasattr(self, 'remote_stock_sort_mode'):
+            self.remote_stock_sort_mode = 'name'
+        if self.remote_stock_sort_mode == 'name':
+            self.remote_stock_sort_mode = 'qty'
+            instance.icon = 'sort-numeric-ascending'
+            instance.md_bg_color = (0.8, 0.9, 1, 1)
+            self.notify('Tri: Quantité (Ruptures en premier)', 'info')
+        else:
+            self.remote_stock_sort_mode = 'name'
+            instance.icon = 'sort-alphabetical-variant'
+            instance.md_bg_color = (0.95, 0.95, 0.95, 1)
+            self.notify('Tri: Alphabétique (A-Z)', 'info')
+        current_text = self.remote_stock_search.text if hasattr(self, 'remote_stock_search') else ''
+        self.filter_remote_stock_list(current_text)
+
+    def _load_more_remote_stock(self):
+        if getattr(self, 'remote_stock_loading_lock', False):
+            return
+        source_list = getattr(self, '_filtered_remote_stock_source', [])
+        total_items = len(source_list)
+        offset = getattr(self, 'remote_stock_offset', 0)
+        if offset >= total_items:
+            return
+        self.remote_stock_loading_lock = True
+        batch_size = 50
+        end_idx = min(offset + batch_size, total_items)
+        batch = source_list[offset:end_idx]
+        import threading
+        from kivy.clock import Clock
+
+        def process_batch():
+            rv_data = []
+
+            def fmt_qty(val):
+                try:
+                    val = float(val)
+                    return str(int(val)) if val.is_integer() else f'{val:.2f}'
+                except:
+                    return '0'
+            for p in batch:
+                name = self.fix_text(str(p.get('name', '')))
+                s_context = float(p.get('stock', 0) or 0)
+                s_store_real = float(p.get('real_stock_store', p.get('stock_store', s_context)) or 0)
+                s_wh = float(p.get('stock_warehouse', 0) or 0)
+                if s_context <= -900000 or s_wh <= -900000:
+                    qty_str = 'Illimité'
+                    q_color = [0, 0.6, 0, 1]
+                elif s_wh != 0:
+                    qty_str = f'Mag: {fmt_qty(s_store_real)} | Dép: {fmt_qty(s_wh)}'
+                    q_color = [0, 0, 0, 1] if s_store_real + s_wh > 0 else [0.8, 0, 0, 1]
+                else:
+                    qty_str = fmt_qty(s_store_real)
+                    q_color = [0, 0.6, 0, 1] if s_store_real > 0 else [0.8, 0, 0, 1]
+                rv_data.append({'name_str': name, 'qty_str': qty_str, 'qty_color': q_color})
+            Clock.schedule_once(lambda dt: append_to_ui(rv_data, end_idx), 0)
+
+        def append_to_ui(new_data, new_offset):
+            if hasattr(self, 'remote_stock_rv'):
+                old_scroll = self.remote_stock_rv.scroll_y
+                self.remote_stock_rv.data.extend(new_data)
+                self.remote_stock_offset = new_offset
+                self.remote_stock_rv.refresh_from_data()
+                if old_scroll < 1.0:
+                    self.remote_stock_rv.scroll_y = old_scroll
+            self.remote_stock_loading_lock = False
+        threading.Thread(target=process_batch, daemon=True).start()
+
     def open_remote_transfer_selector(self, mode_transfert='remote_transfer_out', instance=None):
         if not self.is_server_reachable:
             self.notify("Vous devez d'abord être connecté à votre serveur principal.", 'error')
@@ -1766,6 +1982,10 @@ class StockApp(MDApp):
             dialog_title = 'Historique des Transferts (Magasin)'
             theme_color = (0.4, 0.2, 0.6, 1)
             bg_color = (0.95, 0.9, 1, 1)
+        elif mode_transfert == 'remote_stock_view':
+            dialog_title = 'Consulter Stock (Magasin)'
+            theme_color = (0.2, 0.4, 0.6, 1)
+            bg_color = (0.9, 0.95, 1, 1)
         from kivymd.uix.boxlayout import MDBoxLayout
         from kivymd.uix.card import MDCard
         from kivymd.uix.label import MDIcon, MDLabel
@@ -1946,6 +2166,9 @@ class StockApp(MDApp):
         if hasattr(self, 'remote_transfer_dialog') and self.remote_transfer_dialog:
             self.remote_transfer_dialog.dismiss()
             self.remote_transfer_dialog = None
+        if mode_transfert == 'remote_stock_view':
+            self.fetch_and_show_remote_stock(target_server, working_url)
+            return
         if mode_transfert == 'remote_history':
             self.show_split_history_dialog(target_server, working_url)
             return
@@ -4308,7 +4531,7 @@ class StockApp(MDApp):
             grid_expenses.add_widget(self._create_dash_btn('cash-minus', 'DÉPENSES / CHARGES', c_de[0], c_de[1], lambda x: self.open_add_expense_dialog()))
             self.buttons_container.add_widget(grid_expenses)
             self.buttons_container.add_widget(self._create_dash_btn('book-open-page-variant', 'OUVRIR LE CATALOGUE', c_ca[0], c_ca[1], self.open_catalogue_browser))
-        if has_multiple_stores:
+        if has_multiple_stores and (not self.is_seller_mode):
             multi_store_container = MDCard(orientation='vertical', padding=[dp(15), dp(15), dp(15), dp(15)], spacing=dp(15), radius=[16], md_bg_color=(1, 1, 1, 1), elevation=1, size_hint_y=None, adaptive_height=True)
             header_multi = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40))
             title_box = MDBoxLayout(orientation='horizontal', adaptive_width=True, spacing=dp(8), pos_hint={'center_y': 0.5})
@@ -4339,6 +4562,8 @@ class StockApp(MDApp):
             row_retours.add_widget(create_modern_action('arrow-u-left-top', 'RET. CLIENT', (0.8, 0.1, 0.1, 1), (1, 0.92, 0.92, 1), lambda x: self.open_remote_transfer_selector('remote_return_client')))
             row_retours.add_widget(create_modern_action('arrow-u-right-top', 'RET. FOURN.', (0.6, 0.2, 0.7, 1), (0.96, 0.92, 1, 1), lambda x: self.open_remote_transfer_selector('remote_return_supplier')))
             multi_store_container.add_widget(row_retours)
+            btn_view_stock = MDFillRoundFlatIconButton(text='CONSULTER LE STOCK DISTANT', icon='eye-outline', md_bg_color=(0.2, 0.4, 0.6, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), font_size='14sp', font_name='RobotoBold', pos_hint={'center_x': 0.5}, size_hint_x=0.9, size_hint_y=None, height=dp(48), on_release=lambda x: self.open_remote_transfer_selector('remote_stock_view'))
+            multi_store_container.add_widget(btn_view_stock)
             btn_sync_articles = MDFillRoundFlatIconButton(text='SYNCHRONISER LES ARTICLES', icon='cloud-sync', md_bg_color=(0.12, 0.15, 0.2, 1), theme_text_color='Custom', text_color=(1, 1, 1, 1), icon_color=(1, 1, 1, 1), font_size='14sp', font_name='RobotoBold', pos_hint={'center_x': 0.5}, size_hint_x=0.9, size_hint_y=None, height=dp(48), on_release=self.open_sync_articles_dialog)
             multi_store_container.add_widget(btn_sync_articles)
             self.buttons_container.add_widget(multi_store_container)
@@ -6637,29 +6862,10 @@ class StockApp(MDApp):
         if not self.is_seller_mode:
             content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
             add_section('VOS MAGASINS / SERVEURS')
-            data = self.store.get('servers_config')
-            servers = data.get('list', [])
-            active_idx = data.get('active_index', 0)
-            stores_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(10), dp(0), dp(10), dp(10)])
-            indexed_servers_settings = list(enumerate(servers))
-            indexed_servers_settings.sort(key=lambda item: str(item[1].get('name', '')).lower())
-            for original_idx, srv in indexed_servers_settings:
-                is_active = original_idx == active_idx
-                card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(60), padding=[dp(15), dp(5), dp(15), dp(5)], spacing=dp(15), radius=[12], md_bg_color=(0.9, 0.97, 0.9, 1) if is_active else (0.95, 0.95, 0.95, 1), elevation=1, ripple_behavior=True)
-                card.bind(on_release=lambda x, idx=original_idx: self.open_edit_server_dialog(idx))
-                icon_name = 'check-circle' if is_active else 'store-outline'
-                icon_color = (0, 0.6, 0.2, 1) if is_active else (0.5, 0.5, 0.5, 1)
-                card.add_widget(MDIcon(icon=icon_name, theme_text_color='Custom', text_color=icon_color, font_size='26sp', pos_hint={'center_y': 0.5}))
-                card.add_widget(MDLabel(text=self.fix_text(srv.get('name', 'Inconnu')), bold=is_active, font_name='ArabicFont', font_size='17sp', theme_text_color='Primary'))
-                card.add_widget(MDIcon(icon='chevron-right', theme_text_color='Hint', font_size='24sp', pos_hint={'center_y': 0.5}))
-                stores_layout.add_widget(card)
-            content_list.add_widget(stores_layout)
-            btns_store = MDBoxLayout(padding=[dp(10), 0, dp(10), 0], adaptive_height=True)
-            btns_store.add_widget(MDFillRoundFlatIconButton(text='Ajouter un magasin', icon='plus-circle', font_size='15sp', size_hint_x=1, height=dp(48), md_bg_color=(0.1, 0.5, 0.8, 1), on_release=lambda x: self.open_edit_server_dialog(None)))
-            content_list.add_widget(btns_store)
+            add_option('Gérer les magasins', 'Ajouter, modifier ou supprimer vos serveurs', 'server-network', lambda x: [self.dialog.dismiss(), self.open_stores_list_dialog()])
         content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
-        add_section('IMPRIMANTE (Bluetooth)')
-        printer_conf = {'name': 'Non configurée', 'mac': '', 'auto': False}
+        add_section('IMPRIMANTE (Bluetooth / Serveur)')
+        printer_conf = {'name': 'Non configurée', 'mac': '', 'auto': False, 'auto_server': False}
         if self.store.exists('printer_config'):
             printer_conf = self.store.get('printer_config')
         p_name = printer_conf.get('name', 'Non configurée') or 'Non configurée'
@@ -6667,7 +6873,7 @@ class StockApp(MDApp):
         add_option("Oublier l'imprimante", "Déconnecter l'appareil actuel", 'printer-off', lambda x: self.clear_printer_selection(x), icon_color=(0.8, 0, 0, 1))
         auto_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(5)))
         auto_layout.bind(minimum_height=auto_layout.setter('height'))
-        lbl_auto = MDLabel(text='Impression Auto après validation', theme_text_color='Primary', size_hint_x=0.8, size_hint_y=None)
+        lbl_auto = MDLabel(text='Impression Auto après validation (Bluetooth)', theme_text_color='Primary', size_hint_x=0.8, size_hint_y=None)
         lbl_auto.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
         lbl_auto.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
         chk_auto = MDCheckbox(active=printer_conf.get('auto', False), size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_y': 0.5})
@@ -6675,6 +6881,22 @@ class StockApp(MDApp):
         auto_layout.add_widget(lbl_auto)
         auto_layout.add_widget(chk_auto)
         content_list.add_widget(auto_layout)
+        auto_srv_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(5)))
+        auto_srv_layout.bind(minimum_height=auto_srv_layout.setter('height'))
+        lbl_auto_srv = MDLabel(text='Impression Auto depuis le Serveur (PC)', theme_text_color='Primary', size_hint_x=0.8, size_hint_y=None)
+        lbl_auto_srv.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
+        lbl_auto_srv.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        chk_auto_srv = MDCheckbox(active=printer_conf.get('auto_server', False), size_hint=(None, None), size=(dp(40), dp(40)), pos_hint={'center_y': 0.5})
+
+        def toggle_auto_server(inst, val):
+            n = printer_conf.get('name', '')
+            m = printer_conf.get('mac', '')
+            a = printer_conf.get('auto', False)
+            self.store.put('printer_config', name=n, mac=m, auto=a, auto_server=val)
+        chk_auto_srv.bind(active=toggle_auto_server)
+        auto_srv_layout.add_widget(lbl_auto_srv)
+        auto_srv_layout.add_widget(chk_auto_srv)
+        content_list.add_widget(auto_srv_layout)
         add_section('AFFICHAGE')
         current_screen_state = True
         if self.store.exists('screen_config'):
@@ -6697,6 +6919,42 @@ class StockApp(MDApp):
         scroll_view.add_widget(content_list)
         self.dialog = MDDialog(title='Paramètres', type='custom', content_cls=scroll_view, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='FERMER', theme_text_color='Error', on_release=lambda x: self.dialog.dismiss())], size_hint=(0.95, None))
         self.dialog.open()
+
+    def open_stores_list_dialog(self, instance=None):
+        from kivymd.uix.dialog import MDDialog
+        from kivymd.uix.boxlayout import MDBoxLayout
+        from kivymd.uix.scrollview import MDScrollView
+        from kivymd.uix.card import MDCard
+        from kivymd.uix.label import MDLabel, MDIcon
+        from kivymd.uix.button import MDFlatButton, MDFillRoundFlatIconButton
+        from kivy.metrics import dp
+        if hasattr(self, 'stores_dialog') and getattr(self, 'stores_dialog', None):
+            self.stores_dialog.dismiss()
+        data = self.store.get('servers_config')
+        servers = data.get('list', [])
+        active_idx = data.get('active_index', 0)
+        content = MDBoxLayout(orientation='vertical', spacing=dp(10), size_hint_y=None, adaptive_height=True)
+        scroll = MDScrollView(size_hint_y=None, height=dp(400))
+        stores_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(5), dp(10), dp(5), dp(10)])
+        indexed_servers_settings = list(enumerate(servers))
+        indexed_servers_settings.sort(key=lambda item: str(item[1].get('name', '')).lower())
+        for original_idx, srv in indexed_servers_settings:
+            is_active = original_idx == active_idx
+            card = MDCard(orientation='horizontal', size_hint_y=None, height=dp(60), padding=[dp(15), dp(5), dp(15), dp(5)], spacing=dp(15), radius=[12], md_bg_color=(0.9, 0.97, 0.9, 1) if is_active else (0.95, 0.95, 0.95, 1), elevation=1, ripple_behavior=True)
+            card.bind(on_release=lambda x, idx=original_idx: [self.stores_dialog.dismiss(), self.open_edit_server_dialog(idx)])
+            icon_name = 'check-circle' if is_active else 'store-outline'
+            icon_color = (0, 0.6, 0.2, 1) if is_active else (0.5, 0.5, 0.5, 1)
+            card.add_widget(MDIcon(icon=icon_name, theme_text_color='Custom', text_color=icon_color, font_size='26sp', pos_hint={'center_y': 0.5}))
+            card.add_widget(MDLabel(text=self.fix_text(srv.get('name', 'Inconnu')), bold=is_active, font_name='ArabicFont', font_size='17sp', theme_text_color='Primary'))
+            card.add_widget(MDIcon(icon='chevron-right', theme_text_color='Hint', font_size='24sp', pos_hint={'center_y': 0.5}))
+            stores_layout.add_widget(card)
+        scroll.add_widget(stores_layout)
+        content.add_widget(scroll)
+        btns_store = MDBoxLayout(padding=[0, dp(10), 0, 0], adaptive_height=True)
+        btns_store.add_widget(MDFillRoundFlatIconButton(text='Ajouter un magasin', icon='plus-circle', font_size='15sp', size_hint_x=1, height=dp(48), md_bg_color=(0.1, 0.5, 0.8, 1), on_release=lambda x: [self.stores_dialog.dismiss(), self.open_edit_server_dialog(None)]))
+        content.add_widget(btns_store)
+        self.stores_dialog = MDDialog(title='Vos Magasins', type='custom', content_cls=content, radius=[15, 15, 15, 15], buttons=[MDFlatButton(text='RETOUR', theme_text_color='Error', on_release=lambda x: [self.stores_dialog.dismiss(), self.open_ip_settings()])], size_hint=(0.95, None))
+        self.stores_dialog.open()
 
     def open_edit_server_dialog(self, index):
         if hasattr(self, 'dialog') and getattr(self, 'dialog', None):
@@ -6725,7 +6983,7 @@ class StockApp(MDApp):
         content.add_widget(self.field_srv_ext)
         content.add_widget(self.field_srv_pin)
         scroll.add_widget(content)
-        buttons = [MDFlatButton(text='ANNULER', on_release=lambda x: [self.dialog_edit_srv.dismiss(), self.open_ip_settings()])]
+        buttons = [MDFlatButton(text='ANNULER', on_release=lambda x: [self.dialog_edit_srv.dismiss(), self.open_stores_list_dialog()])]
         if not is_new:
             buttons.append(MDRaisedButton(text='SUPPRIMER', md_bg_color=(0.8, 0.2, 0.2, 1), on_release=lambda x: self.delete_server_config(index)))
         buttons.append(MDRaisedButton(text='ENREGISTRER', md_bg_color=(0, 0.6, 0.2, 1), on_release=lambda x: self.save_server_config(index)))
@@ -6756,7 +7014,7 @@ class StockApp(MDApp):
         self.apply_active_server()
         self.notify('Configuration sauvegardée', 'success')
         self.dialog_edit_srv.dismiss()
-        self.open_ip_settings()
+        self.open_stores_list_dialog()
 
     def delete_server_config(self, index):
         data = self.store.get('servers_config')
@@ -6774,7 +7032,7 @@ class StockApp(MDApp):
         self.apply_active_server()
         self.notify('Magasin supprimé', 'success')
         self.dialog_edit_srv.dismiss()
-        self.open_ip_settings()
+        self.open_stores_list_dialog()
 
     def save_ip_new_logic(self, instance):
         local_ip = self.field_local_ip.text.strip()
@@ -6796,11 +7054,13 @@ class StockApp(MDApp):
     def toggle_auto_print_setting(self, instance, value):
         name = ''
         mac = ''
+        auto_server = False
         if self.store.exists('printer_config'):
             conf = self.store.get('printer_config')
             name = conf.get('name', '')
             mac = conf.get('mac', '')
-        self.store.put('printer_config', name=name, mac=mac, auto=value)
+            auto_server = conf.get('auto_server', False)
+        self.store.put('printer_config', name=name, mac=mac, auto=value, auto_server=auto_server)
 
     def open_family_selector_dialog(self):
         if not hasattr(self, 'all_categories') or not self.all_categories:
@@ -8354,7 +8614,10 @@ class StockApp(MDApp):
                     final_timestamp = final_timestamp.split('.')[0]
             except:
                 pass
-            data = {'doc_type': doc_type, 'items': self.cart, 'user_name': self.current_user_name, 'timestamp': final_timestamp, 'purchase_location': self.selected_location, 'entity_id': ent_id, 'payment_info': payment_info, 'server_id': server_id_to_update}
+            print_on_server = False
+            if self.store.exists('printer_config'):
+                print_on_server = self.store.get('printer_config').get('auto_server', False)
+            data = {'doc_type': doc_type, 'items': self.cart, 'user_name': self.current_user_name, 'timestamp': final_timestamp, 'purchase_location': self.selected_location, 'entity_id': ent_id, 'payment_info': payment_info, 'server_id': server_id_to_update, 'print_on_server': print_on_server}
             self.current_editing_server_id = None
             self.editing_payment_amount = None
             self.current_editing_date = None
