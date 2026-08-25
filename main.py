@@ -1942,13 +1942,20 @@ class StockApp(MDApp):
 
         def append_to_ui(new_data, new_offset):
             if hasattr(self, 'remote_stock_rv'):
-                old_scroll = self.remote_stock_rv.scroll_y
+                old_scroll_y = self.remote_stock_rv.scroll_y
+                old_data_len = len(self.remote_stock_rv.data)
                 self.remote_stock_rv.data.extend(new_data)
                 self.remote_stock_offset = new_offset
                 self.remote_stock_rv.refresh_from_data()
-                if old_scroll < 1.0:
-                    self.remote_stock_rv.scroll_y = old_scroll
-            self.remote_stock_loading_lock = False
+                if old_data_len > 0:
+                    new_data_len = len(self.remote_stock_rv.data)
+                    correction_factor = old_data_len / new_data_len
+                    new_scroll_y = old_scroll_y * correction_factor + (1 - correction_factor)
+                    self.remote_stock_rv.scroll_y = new_scroll_y
+
+            def unlock_scrolling(dt):
+                self.remote_stock_loading_lock = False
+            Clock.schedule_once(unlock_scrolling, 0.4)
         threading.Thread(target=process_batch, daemon=True).start()
 
     def open_remote_transfer_selector(self, mode_transfert='remote_transfer_out', instance=None):
@@ -2303,11 +2310,12 @@ class StockApp(MDApp):
                 self._split_end_date = yesterday
                 self.btn_split_yesterday.md_bg_color = active_color
             elif filter_type == 'semaine':
-                self._split_start_date = today - timedelta(days=7)
+                days_to_saturday = (today.weekday() + 2) % 7
+                self._split_start_date = today - timedelta(days=days_to_saturday)
                 self._split_end_date = today
                 self.btn_split_week.md_bg_color = active_color
             elif filter_type == 'mois':
-                self._split_start_date = today - timedelta(days=30)
+                self._split_start_date = today.replace(day=1)
                 self._split_end_date = today
                 self.btn_split_month.md_bg_color = active_color
         Clock.schedule_once(lambda dt: self._trigger_split_fetch(), 0.05)
@@ -4076,11 +4084,12 @@ class StockApp(MDApp):
                 end_date = start_date
                 self.btn_ent_hist_yesterday.md_bg_color = active_color
             elif filter_type == 'semaine':
-                start_date = today - timedelta(days=7)
+                days_to_saturday = (today.weekday() + 2) % 7
+                start_date = today - timedelta(days=days_to_saturday)
                 end_date = today
                 self.btn_ent_hist_week.md_bg_color = active_color
             elif filter_type == 'mois':
-                start_date = today - timedelta(days=30)
+                start_date = today.replace(day=1)
                 end_date = today
                 self.btn_ent_hist_month.md_bg_color = active_color
         self.rv_entity_history.data = [{'type_str': 'Chargement...', 'ref_str': '', 'entity_str': 'Veuillez patienter', 'date_str': '', 'amount_text': '', 'icon': 'timer-sand', 'icon_color': [0.5, 0.5, 0.5, 1], 'bg_color': [1, 1, 1, 1], 'is_local': False, 'raw_data': None}]
@@ -4568,50 +4577,56 @@ class StockApp(MDApp):
             multi_store_container.add_widget(btn_sync_articles)
             self.buttons_container.add_widget(multi_store_container)
         self.stats_card_container.clear_widgets()
-        self.stats_card_container.md_bg_color = (0, 0, 0, 0)
-        self.stats_card_container.elevation = 0
+        self.stats_card_container.md_bg_color = (1, 1, 1, 1)
+        self.stats_card_container.elevation = 2
+        self.stats_card_container.radius = [20, 20, 20, 20]
         self.stats_card_container.size_hint_y = None
         self.stats_card_container.adaptive_height = True
-        self.stats_card_container.padding = [0, dp(5), 0, dp(20)]
-        header_box = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing=dp(5))
-        title_label = MDLabel(text='Tableau de Bord', font_style='H6', bold=True, theme_text_color='Primary', size_hint_y=None, height=dp(30))
+        self.stats_card_container.padding = [dp(15), dp(20), dp(15), dp(20)]
+        self.stats_card_container.spacing = dp(15)
+        header_box = MDBoxLayout(orientation='vertical', size_hint_y=None, adaptive_height=True, spacing=dp(12))
+        title_label = MDLabel(text='Tableau de Bord', font_style='H5', bold=True, theme_text_color='Primary', halign='center', size_hint_y=None, height=dp(30))
         header_box.add_widget(title_label)
         if not self.is_seller_mode:
             from kivymd.uix.button import MDRaisedButton
-            tabs_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(40), spacing=dp(5))
-            self.btn_stat_today = MDRaisedButton(text='AUJ.', size_hint_x=0.33, elevation=0, on_release=lambda x: self.filter_admin_stats(day_offset=0))
-            self.btn_stat_yesterday = MDRaisedButton(text='HIER', size_hint_x=0.33, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_admin_stats(day_offset=1))
-            self.btn_stat_date = MDRaisedButton(text='CALENDRIER', size_hint_x=0.33, elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self.open_admin_stats_date_picker)
-            tabs_box.add_widget(self.btn_stat_today)
-            tabs_box.add_widget(self.btn_stat_yesterday)
-            tabs_box.add_widget(self.btn_stat_date)
-            header_box.add_widget(tabs_box)
+            tabs_wrapper = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(38), spacing=dp(6), adaptive_width=True, pos_hint={'center_x': 0.5})
+            self.btn_stat_today = MDRaisedButton(text='AUJ', size_hint_x=None, width=dp(55), font_size='11sp', elevation=0, on_release=lambda x: self.filter_admin_stats(filter_type='auj'))
+            self.btn_stat_yesterday = MDRaisedButton(text='HIE', size_hint_x=None, width=dp(55), font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_admin_stats(filter_type='hier'))
+            self.btn_stat_week = MDRaisedButton(text='SEM', size_hint_x=None, width=dp(55), font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_admin_stats(filter_type='semaine'))
+            self.btn_stat_month = MDRaisedButton(text='MOI', size_hint_x=None, width=dp(55), font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=lambda x: self.filter_admin_stats(filter_type='mois'))
+            self.btn_stat_date = MDRaisedButton(text='CAL', size_hint_x=None, width=dp(55), font_size='11sp', elevation=0, md_bg_color=(0.5, 0.5, 0.5, 1), on_release=self.open_admin_stats_date_picker)
+            tabs_wrapper.add_widget(self.btn_stat_today)
+            tabs_wrapper.add_widget(self.btn_stat_yesterday)
+            tabs_wrapper.add_widget(self.btn_stat_week)
+            tabs_wrapper.add_widget(self.btn_stat_month)
+            tabs_wrapper.add_widget(self.btn_stat_date)
+            header_box.add_widget(tabs_wrapper)
         self.stats_card_container.add_widget(header_box)
-        stats_grid = MDGridLayout(cols=2, spacing=dp(10), adaptive_height=True)
+        stats_grid = MDGridLayout(cols=2, spacing=dp(12), adaptive_height=True)
 
         def create_modern_stat_card(icon, title, value_id, color_bg, color_icon):
-            card = MDCard(orientation='vertical', padding=dp(12), radius=[15], md_bg_color=color_bg, elevation=1, size_hint_y=None, height=dp(100))
-            top_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(30))
-            top_box.add_widget(MDIcon(icon=icon, theme_text_color='Custom', text_color=color_icon, font_size='26sp'))
-            top_box.add_widget(MDLabel(text=title, halign='right', font_style='Caption', bold=True, theme_text_color='Secondary'))
-            val_label = MDLabel(text='0,00 DA', halign='left', font_style='H5', bold=True, theme_text_color='Custom', text_color=(0.2, 0.2, 0.2, 1))
+            card = MDCard(orientation='vertical', padding=[dp(12), dp(15), dp(12), dp(15)], radius=[15], md_bg_color=color_bg, elevation=0, size_hint_y=None, height=dp(105))
+            top_box = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(25), spacing=dp(6))
+            top_box.add_widget(MDIcon(icon=icon, theme_text_color='Custom', text_color=color_icon, font_size='22sp', size_hint_x=None, width=dp(25), pos_hint={'center_y': 0.5}))
+            top_box.add_widget(MDLabel(text=title, halign='left', font_style='Caption', bold=True, theme_text_color='Secondary', valign='center'))
+            val_label = MDLabel(text='0,00 DA', halign='center', font_style='H6', bold=True, theme_text_color='Custom', text_color=(0.15, 0.15, 0.15, 1))
             setattr(self, value_id, val_label)
             card.add_widget(top_box)
             card.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
             card.add_widget(val_label)
             return card
-        stats_grid.add_widget(create_modern_stat_card('cash-plus', 'Encaissements', 'lbl_new_in', (0.95, 1, 0.95, 1), (0, 0.5, 0.5, 1)))
+        stats_grid.add_widget(create_modern_stat_card('cash-plus', 'Encaissements', 'lbl_new_in', (0.92, 0.98, 0.92, 1), (0, 0.6, 0.2, 1)))
         if not self.is_seller_mode:
-            stats_grid.add_widget(create_modern_stat_card('cash-minus', 'Décaissements', 'lbl_new_out', (1, 0.9, 0.9, 1), (0.8, 0, 0, 1)))
-            stats_grid.add_widget(create_modern_stat_card('chart-line-variant', 'Bénéfice Net', 'lbl_total_profit', (0.9, 1, 0.9, 1), (0, 0.6, 0, 1)))
-            stats_grid.add_widget(create_modern_stat_card('cash-remove', 'Dépenses (Frais)', 'lbl_total_depenses', (1, 0.95, 0.8, 1), (0.9, 0.3, 0, 1)))
-            stats_grid.add_widget(create_modern_stat_card('account-cash', 'Créances Cl.', 'lbl_total_creance', (0.9, 0.95, 1, 1), (0, 0, 0.8, 1)))
-            stats_grid.add_widget(create_modern_stat_card('truck-fast', 'Dettes Fourn.', 'lbl_total_dette', (1, 0.95, 0.8, 1), (1, 0.4, 0, 1)))
+            stats_grid.add_widget(create_modern_stat_card('cash-minus', 'Décaissements', 'lbl_new_out', (1.0, 0.92, 0.92, 1), (0.8, 0.1, 0.1, 1)))
+            stats_grid.add_widget(create_modern_stat_card('chart-line-variant', 'Bénéfice Net', 'lbl_total_profit', (0.9, 0.96, 1.0, 1), (0.1, 0.4, 0.8, 1)))
+            stats_grid.add_widget(create_modern_stat_card('cash-remove', 'Dépenses', 'lbl_total_depenses', (1.0, 0.95, 0.86, 1), (0.9, 0.4, 0, 1)))
+            stats_grid.add_widget(create_modern_stat_card('account-cash', 'Créances Cl.', 'lbl_total_creance', (0.94, 0.9, 0.98, 1), (0.6, 0.1, 0.6, 1)))
+            stats_grid.add_widget(create_modern_stat_card('truck-fast', 'Dettes Fourn.', 'lbl_total_dette', (1.0, 0.88, 0.88, 1), (0.8, 0.2, 0.2, 1)))
         self.stats_card_container.add_widget(stats_grid)
         self.check_and_load_stats()
         if not self.is_seller_mode:
             if not hasattr(self, 'admin_start_date') or not self.admin_start_date:
-                self.filter_admin_stats(day_offset=0)
+                self.filter_admin_stats(filter_type='auj')
 
     def open_add_expense_dialog(self, edit_data=None):
         from kivymd.uix.dialog import MDDialog
@@ -4861,37 +4876,68 @@ class StockApp(MDApp):
         self._reset_notification_state(0)
 
     def open_admin_stats_date_picker(self, instance):
-        date_dialog = MDDatePicker()
+        from kivymd.uix.pickers import MDDatePicker
+        date_dialog = MDDatePicker(mode='range')
         date_dialog.bind(on_save=self.on_admin_stats_date_save)
         date_dialog.open()
 
     def on_admin_stats_date_save(self, instance, value, date_range):
-        self.btn_stat_date.text = str(value)
-        self.filter_admin_stats(specific_date=value)
+        if date_range and len(date_range) > 0:
+            start_date = date_range[0]
+            end_date = date_range[-1]
+            self.filter_admin_stats(filter_type='custom', specific_start=start_date, specific_end=end_date)
+        else:
+            self.filter_admin_stats(filter_type='custom', specific_start=value, specific_end=value)
 
-    def filter_admin_stats(self, day_offset=None, specific_date=None):
+    def filter_admin_stats(self, filter_type=None, specific_start=None, specific_end=None):
         if self.is_seller_mode:
             return
+        from datetime import datetime, timedelta
         inactive_color = (0.5, 0.5, 0.5, 1)
         active_color = self.theme_cls.primary_color
-        if specific_date:
-            self.admin_start_date = str(specific_date)
-            self.admin_end_date = str(specific_date)
-            if hasattr(self, 'btn_stat_today'):
-                self.btn_stat_today.md_bg_color = inactive_color
-                self.btn_stat_yesterday.md_bg_color = inactive_color
+        if hasattr(self, 'btn_stat_today'):
+            buttons = [self.btn_stat_today, self.btn_stat_yesterday, getattr(self, 'btn_stat_week', None), getattr(self, 'btn_stat_month', None), self.btn_stat_date]
+            for btn in buttons:
+                if btn:
+                    btn.md_bg_color = inactive_color
+        today = datetime.now().date()
+        start_date = today
+        end_date = today
+        if filter_type == 'custom' and specific_start and specific_end:
+            start_date = specific_start
+            end_date = specific_end
+            if hasattr(self, 'btn_stat_date'):
                 self.btn_stat_date.md_bg_color = active_color
+                if start_date == end_date:
+                    self.btn_stat_date.text = start_date.strftime('%d/%m')
+                else:
+                    self.btn_stat_date.text = 'CAL'
         else:
-            if day_offset is None:
-                day_offset = 0
-            target_date = datetime.now().date() - timedelta(days=day_offset)
-            self.admin_start_date = str(target_date)
-            self.admin_end_date = str(target_date)
-            if hasattr(self, 'btn_stat_today'):
-                self.btn_stat_today.md_bg_color = active_color if day_offset == 0 else inactive_color
-                self.btn_stat_yesterday.md_bg_color = active_color if day_offset == 1 else inactive_color
-                self.btn_stat_date.md_bg_color = inactive_color
-                self.btn_stat_date.text = 'CALENDRIER'
+            if hasattr(self, 'btn_stat_date'):
+                self.btn_stat_date.text = 'CAL'
+            if filter_type == 'auj' or filter_type is None:
+                start_date = today
+                end_date = today
+                if hasattr(self, 'btn_stat_today'):
+                    self.btn_stat_today.md_bg_color = active_color
+            elif filter_type == 'hier':
+                start_date = today - timedelta(days=1)
+                end_date = start_date
+                if hasattr(self, 'btn_stat_yesterday'):
+                    self.btn_stat_yesterday.md_bg_color = active_color
+            elif filter_type == 'semaine':
+                days_to_saturday = (today.weekday() + 2) % 7
+                start_date = today - timedelta(days=days_to_saturday)
+                end_date = today
+                if hasattr(self, 'btn_stat_week'):
+                    self.btn_stat_week.md_bg_color = active_color
+            elif filter_type == 'mois':
+                start_date = today.replace(day=1)
+                end_date = today
+                if hasattr(self, 'btn_stat_month'):
+                    self.btn_stat_month.md_bg_color = active_color
+        self.admin_start_date = str(start_date)
+        self.admin_end_date = str(end_date)
         self.fetch_admin_stats()
         self.fetch_dashboard_stats()
 
@@ -5869,7 +5915,7 @@ class StockApp(MDApp):
         card_login.add_widget(MDBoxLayout(size_hint_y=None, height=dp(5)))
         card_login.add_widget(MDFillRoundFlatButton(text='CONNEXION', font_size='16sp', font_name='RobotoBold', size_hint_x=1, size_hint_y=None, height=dp(50), md_bg_color=(0.1, 0.45, 0.85, 1), on_release=self.do_login))
         layout.add_widget(card_login)
-        footer_label = MDLabel(text='MagPro v7.8.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.03}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
+        footer_label = MDLabel(text='MagPro v7.9.0 © 2026', halign='center', pos_hint={'center_x': 0.5, 'y': 0.03}, size_hint_y=None, height=dp(20), font_style='Caption', theme_text_color='Hint')
         layout.add_widget(footer_label)
         screen.add_widget(layout)
         return screen
@@ -8851,11 +8897,12 @@ class StockApp(MDApp):
                 end_date = start_date
                 self.btn_hist_yesterday.md_bg_color = active_color
             elif filter_type == 'semaine':
-                start_date = today - timedelta(days=7)
+                days_to_saturday = (today.weekday() + 2) % 7
+                start_date = today - timedelta(days=days_to_saturday)
                 end_date = today
                 self.btn_hist_week.md_bg_color = active_color
             elif filter_type == 'mois':
-                start_date = today - timedelta(days=30)
+                start_date = today.replace(day=1)
                 end_date = today
                 self.btn_hist_month.md_bg_color = active_color
         self.history_view_start = start_date
@@ -9316,6 +9363,7 @@ class StockApp(MDApp):
                 display_amount = f'+ {abs(amount):.2f} DA'
             else:
                 full_doc_name = 'Crédit / Dette'
+                icon_name = 'notebook-edit'
                 amount_color = (0.8, 0, 0, 1)
                 display_amount = f'- {abs(amount):.2f} DA'
             final_total = abs(amount)
@@ -9354,7 +9402,7 @@ class StockApp(MDApp):
                 qty = float(item.get('qty', 0))
                 qty_str = str(int(qty)) if qty.is_integer() else str(qty)
                 price = float(item.get('price', 0))
-                line_total = qty * price * (1 + float(item.get('tva', 0)) / 100)
+                total_line = qty * price
                 item_box = MDBoxLayout(orientation='vertical', adaptive_height=True, padding=[dp(16), dp(8)], spacing=dp(4))
                 lbl_name = MDLabel(text=self.fix_text(item.get('name', '')), theme_text_color='Primary', font_style='Subtitle1', bold=True, adaptive_height=True, shorten=False)
                 if doc_type in ['TR', 'BE', 'BS', 'DP']:
@@ -9363,7 +9411,7 @@ class StockApp(MDApp):
                     item_box.add_widget(lbl_details)
                 else:
                     lbl_details = MDLabel(text=f'{qty_str} x {price:.2f} DA', theme_text_color='Secondary', font_style='Body2', adaptive_height=True)
-                    lbl_total = MDLabel(text=f'Total: {line_total:.2f} DA', theme_text_color='Secondary', font_style='Body2', adaptive_height=True)
+                    lbl_total = MDLabel(text=f'Total: {total_line:.2f} DA', theme_text_color='Secondary', font_style='Body2', adaptive_height=True)
                     item_box.add_widget(lbl_name)
                     item_box.add_widget(lbl_details)
                     item_box.add_widget(lbl_total)
@@ -9372,7 +9420,7 @@ class StockApp(MDApp):
         elif is_financial:
             list_layout.add_widget(OneLineListItem(text='Opération Financière (Caisse)'))
         else:
-            list_layout.add_widget(OneLineListItem(text='Aucun article'))
+            list_layout.add_widget(OneLineListItem(text='Aucun article (Opération)'))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         actions_layout = MDBoxLayout(orientation='vertical', spacing='10dp', adaptive_height=True, padding=[0, '15dp', 0, 0])
@@ -9574,8 +9622,10 @@ class StockApp(MDApp):
                     item_box.add_widget(lbl_total)
                 list_layout.add_widget(item_box)
                 list_layout.add_widget(MDBoxLayout(size_hint_y=None, height=dp(1), md_bg_color=(0.9, 0.9, 0.9, 1)))
+        elif is_financial_op:
+            list_layout.add_widget(OneLineListItem(text='Opération Financière (Caisse)'))
         else:
-            list_layout.add_widget(OneLineListItem(text='Aucun article أو عملية مالية'))
+            list_layout.add_widget(OneLineListItem(text='Aucun article (Opération)'))
         scroll.add_widget(list_layout)
         content.add_widget(scroll)
         actions_layout = MDBoxLayout(orientation='vertical', spacing='10dp', adaptive_height=True, padding=[0, '15dp', 0, 0])
