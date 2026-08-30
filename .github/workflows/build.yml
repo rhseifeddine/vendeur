@@ -1,3 +1,5 @@
+.github/workflows/build.yml
+
 name: Build Android APK (Release)
 
 on:
@@ -62,6 +64,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install buildozer cython
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -71,11 +74,6 @@ jobs:
       - name: Decode Keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > ${{ github.workspace }}/magpro.keystore
-
-      - name: Inject Telegram Secrets into main.py
-        run: |
-          sed -i "s/GITHUB_SECRET_TELEGRAM_BOT_TOKEN/${{ secrets.TELEGRAM_BOT_TOKEN }}/g" main.py
-          sed -i "s/GITHUB_SECRET_TELEGRAM_ADMIN_ID/${{ secrets.TELEGRAM_ADMIN_ID }}/g" main.py
 
       - name: Build and Sign Release APK
         env:
