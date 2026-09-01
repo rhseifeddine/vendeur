@@ -6943,6 +6943,22 @@ class StockApp(MDApp):
         auto_srv_layout.add_widget(lbl_auto_srv)
         auto_srv_layout.add_widget(chk_auto_srv)
         content_list.add_widget(auto_srv_layout)
+        content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
+        add_section('LOCALISATION (GPS)')
+        gps_conf = {'enabled': False}
+        if hasattr(self, 'store') and self.store.exists('gps_config'):
+            gps_conf = self.store.get('gps_config')
+        gps_layout = MDBoxLayout(orientation='horizontal', size_hint_y=None, padding=(dp(20), dp(5)))
+        gps_layout.bind(minimum_height=gps_layout.setter('height'))
+        lbl_gps = MDLabel(text='Activer le suivi GPS en arrière-plan', theme_text_color='Primary', size_hint_x=0.8, size_hint_y=None)
+        lbl_gps.bind(width=lambda inst, val: setattr(inst, 'text_size', (val, None)))
+        lbl_gps.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        chk_gps = MDCheckbox(active=gps_conf.get('enabled', False), size_hint=(None, None), size=(dp(48), dp(48)), pos_hint={'center_y': 0.5})
+        chk_gps.bind(active=self.toggle_gps_setting)
+        gps_layout.add_widget(lbl_gps)
+        gps_layout.add_widget(chk_gps)
+        content_list.add_widget(gps_layout)
+        content_list.add_widget(MDBoxLayout(size_hint_y=None, height=dp(10)))
         add_section('AFFICHAGE')
         current_screen_state = True
         if self.store.exists('screen_config'):
@@ -7107,6 +7123,16 @@ class StockApp(MDApp):
             mac = conf.get('mac', '')
             auto_server = conf.get('auto_server', False)
         self.store.put('printer_config', name=name, mac=mac, auto=value, auto_server=auto_server)
+
+    def toggle_gps_setting(self, instance, value):
+        if hasattr(self, 'store'):
+            self.store.put('gps_config', enabled=value)
+            if value:
+                self.notify('Suivi GPS Activé', 'success')
+                self.start_gps_service()
+            else:
+                self.notify('Suivi GPS Désactivé', 'info')
+                self.stop_gps_service()
 
     def open_family_selector_dialog(self):
         if not hasattr(self, 'all_categories') or not self.all_categories:
@@ -10265,6 +10291,12 @@ class StockApp(MDApp):
     def start_gps_service(self):
         if platform != 'android':
             return
+        gps_enabled = False
+        if hasattr(self, 'store') and self.store.exists('gps_config'):
+            gps_enabled = self.store.get('gps_config').get('enabled', False)
+        if not gps_enabled:
+            print('[GPS] Service GPS ignoré (Désactivé dans les paramètres).')
+            return
         if not hasattr(self, 'kalman_filter'):
             self.kalman_filter = KalmanLatLon(Q_metres_per_second=3)
         from android.permissions import request_permissions, Permission
@@ -10294,6 +10326,21 @@ class StockApp(MDApp):
                 print(f'[GPS Error] Echec démarrage GPS natif: {e}')
                 self.notify('Erreur initialisation GPS', 'error')
         request_permissions([Permission.ACCESS_FINE_LOCATION, Permission.ACCESS_COARSE_LOCATION], _start_native_gps)
+
+    def stop_gps_service(self):
+        if platform == 'android':
+            try:
+                if hasattr(self, 'location_manager') and self.location_manager:
+                    if hasattr(self, 'location_listener') and self.location_listener:
+                        self.location_manager.removeUpdates(self.location_listener)
+                        print('[GPS] Mises à jour de localisation arrêtées.')
+                if hasattr(self, 'wake_lock') and self.wake_lock:
+                    if self.wake_lock.isHeld():
+                        self.wake_lock.release()
+                        print('[GPS] WakeLock libéré.')
+                    self.wake_lock = None
+            except Exception as e:
+                print(f"[GPS Error] Erreur lors de l'arrêt du GPS: {e}")
 
     def on_fused_location(self, location):
         try:
