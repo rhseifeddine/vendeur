@@ -978,7 +978,7 @@ class StockApp(MDApp):
                     return {'idx': idx, 'added': 0, 'updated': 0, 'processed': 0}
                 items_to_sync = []
                 for p_master in master_catalog_by_barcode.values():
-                    items_to_sync.append({'name': str(p_master.get('name', '')).strip(), 'barcode': str(p_master.get('barcode', '')).strip(), 'description': str(p_master.get('description', '')), 'product_ref': str(p_master.get('product_ref') or p_master.get('ref') or ''), 'category': str(p_master.get('category', '')), 'cost': float(p_master.get('purchase_price', p_master.get('cost', 0)) or 0), 'price': float(p_master.get('price', 0) or 0), 'price_semi': float(p_master.get('price_semi', 0) or 0), 'price_wholesale': float(p_master.get('price_wholesale', 0) or 0), 'image_path': str(p_master.get('image_path', '')), 'unit': str(p_master.get('unit', '')), 'tva': float(p_master.get('tva', 0) or 0)})
+                    items_to_sync.append({'name': str(p_master.get('name', '')).strip(), 'barcode': str(p_master.get('barcode', '')).strip(), 'description': str(p_master.get('description', '')), 'product_ref': str(p_master.get('product_ref') or p_master.get('ref') or ''), 'category': str(p_master.get('category', '')), 'cost': float(p_master.get('purchase_price', p_master.get('cost', 0)) or 0), 'price': float(p_master.get('price', 0) or 0), 'price_semi': float(p_master.get('price_semi', 0) or 0), 'price_wholesale': float(p_master.get('price_wholesale', 0) or 0), 'image_path': str(p_master.get('image_path', '')), 'unit': str(p_master.get('unit', '')), 'tva': float(p_master.get('tva', 0) or 0), 'show_in_menu': int(p_master.get('show_in_menu', 1))})
                 added_count = 0
                 updated_count = 0
                 processed_count = 0
